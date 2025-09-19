@@ -55,22 +55,36 @@ Public Sub AnalyzeAllReports()
     For Each doc In db.Containers("Reports").Documents
         DoEvents ' Permet à Access de traiter les événements
         
+        On Error Resume Next
+        
         ' Ouvrir l'état en mode Design
-        DoCmd.OpenReport doc.Name, acViewDesign
-        Set rpt = Reports(doc.Name)
+        DoCmd.OpenReport doc.Name, acViewDesign, , , acHidden
         
-        ' Redimensionner le tableau si nécessaire
-        reportCount = reportCount + 1
-        ReDim Preserve reports(1 To reportCount)
+        If Err.Number = 0 Then
+            ' Accéder à l'état ouvert
+            Set rpt = Reports(doc.Name)
+            
+            If Not rpt Is Nothing Then
+                ' Redimensionner le tableau si nécessaire
+                reportCount = reportCount + 1
+                ReDim Preserve reports(1 To reportCount)
+                
+                ' Analyser l'état
+                Call AnalyzeReport(rpt, reports(reportCount))
+                
+                ' Mettre à jour la barre de progression
+                Debug.Print "Analyse de l'état: " & doc.Name & " terminée"
+            End If
+            
+            ' Fermer l'état
+            DoCmd.Close acReport, doc.Name, acSaveNo
+        Else
+            Debug.Print "Impossible d'ouvrir l'état: " & doc.Name & " - Erreur: " & Err.Description
+        End If
         
-        ' Analyser l'état
-        Call AnalyzeReport(rpt, reports(reportCount))
-        
-        ' Fermer l'état
-        DoCmd.Close acReport, doc.Name
-        
-        ' Mettre à jour la barre de progression (optionnel)
-        Debug.Print "Analyse de l'état: " & doc.Name & " terminée"
+        Err.Clear
+        Set rpt = Nothing
+        On Error GoTo ErrorHandler
         
     Next doc
     
@@ -134,25 +148,49 @@ Private Sub AnalyzeReport(rpt As Access.Report, ByRef reportInfo As ReportInfo)
     Dim controlCount As Integer
     Dim sectionName As String
     
+    On Error Resume Next
+    
     reportInfo.ReportName = rpt.Name
-    reportInfo.RecordSource = rpt.RecordSource
+    reportInfo.RecordSource = Nz(rpt.RecordSource, "")
     controlCount = 0
     
     ' Analyser tous les contrôles dans toutes les sections
-    Call AnalyzeSection(rpt.ReportHeader, "En-tête d'état", reportInfo, controlCount)
-    Call AnalyzeSection(rpt.PageHeader, "En-tête de page", reportInfo, controlCount)
-    Call AnalyzeSection(rpt.Detail, "Détail", reportInfo, controlCount)
-    Call AnalyzeSection(rpt.ReportFooter, "Pied d'état", reportInfo, controlCount)
-    Call AnalyzeSection(rpt.PageFooter, "Pied de page", reportInfo, controlCount)
+    If Not rpt.ReportHeader Is Nothing Then
+        Call AnalyzeSection(rpt.ReportHeader, "En-tête d'état", reportInfo, controlCount)
+    End If
+    
+    If Not rpt.PageHeader Is Nothing Then
+        Call AnalyzeSection(rpt.PageHeader, "En-tête de page", reportInfo, controlCount)
+    End If
+    
+    If Not rpt.Detail Is Nothing Then
+        Call AnalyzeSection(rpt.Detail, "Détail", reportInfo, controlCount)
+    End If
+    
+    If Not rpt.ReportFooter Is Nothing Then
+        Call AnalyzeSection(rpt.ReportFooter, "Pied d'état", reportInfo, controlCount)
+    End If
+    
+    If Not rpt.PageFooter Is Nothing Then
+        Call AnalyzeSection(rpt.PageFooter, "Pied de page", reportInfo, controlCount)
+    End If
     
     ' Analyser les groupes s'ils existent
     Dim i As Integer
-    For i = 0 To rpt.GroupLevel - 1
-        Call AnalyzeSection(rpt.GroupHeader(i), "En-tête de groupe " & (i + 1), reportInfo, controlCount)
-        Call AnalyzeSection(rpt.GroupFooter(i), "Pied de groupe " & (i + 1), reportInfo, controlCount)
-    Next i
+    If rpt.GroupLevel > 0 Then
+        For i = 0 To rpt.GroupLevel - 1
+            If Not rpt.GroupHeader(i) Is Nothing Then
+                Call AnalyzeSection(rpt.GroupHeader(i), "En-tête de groupe " & (i + 1), reportInfo, controlCount)
+            End If
+            If Not rpt.GroupFooter(i) Is Nothing Then
+                Call AnalyzeSection(rpt.GroupFooter(i), "Pied de groupe " & (i + 1), reportInfo, controlCount)
+            End If
+        Next i
+    End If
     
     reportInfo.ControlCount = controlCount
+    
+    On Error GoTo 0
     
 End Sub
 
@@ -160,38 +198,64 @@ Private Sub AnalyzeSection(sect As Section, sectionName As String, ByRef reportI
     
     Dim ctl As Control
     
+    On Error Resume Next
+    
+    If sect Is Nothing Then Exit Sub
+    
     For Each ctl In sect.Controls
         controlCount = controlCount + 1
         ReDim Preserve reportInfo.Controls(0 To controlCount - 1)
         
         With reportInfo.Controls(controlCount - 1)
-            .ControlName = ctl.Name
+            .ControlName = Nz(ctl.Name, "Contrôle_" & controlCount)
             .Section = sectionName
             .Parent = reportInfo.ReportName
             
             ' Type de contrôle
             .ControlType = GetControlTypeName(ctl.ControlType)
             
-            ' Source du contrôle
-            On Error Resume Next
-            .ControlSource = ctl.ControlSource
-            If Err.Number <> 0 Then .ControlSource = "N/A"
-            Err.Clear
+            ' Source du contrôle avec gestion d'erreur
+            .ControlSource = ""
+            If HasProperty(ctl, "ControlSource") Then
+                .ControlSource = Nz(ctl.ControlSource, "")
+            End If
             
-            ' Somme cumulative
-            .RunningSum = GetRunningSumText(ctl)
+            ' Somme cumulative avec gestion d'erreur
+            .RunningSum = "N/A"
+            If HasProperty(ctl, "RunningSum") Then
+                .RunningSum = GetRunningSumText(ctl)
+            End If
             
             ' Expression/Formule
             .Expression = ExtractExpression(.ControlSource)
             
             ' Champs référencés
             .ReferencedFields = ExtractReferencedFields(.ControlSource, .Expression)
-            On Error GoTo 0
             
         End With
     Next ctl
     
+    On Error GoTo 0
+    
 End Sub
+
+' Fonction utilitaire pour vérifier si un objet a une propriété
+Private Function HasProperty(obj As Object, propName As String) As Boolean
+    Dim tempVar As Variant
+    On Error Resume Next
+    tempVar = CallByName(obj, propName, VbGet)
+    HasProperty = (Err.Number = 0)
+    On Error GoTo 0
+End Function
+
+' Fonction Nz personnalisée pour compatibilité
+Private Function Nz(value As Variant, Optional valueIfNull As Variant = "") As Variant
+    If IsNull(value) Or value = "" Then
+        Nz = valueIfNull
+    Else
+        Nz = value
+    End If
+End Function
 
 Private Function GetControlTypeName(ctlType As Integer) As String
     
@@ -220,13 +284,20 @@ End Function
 Private Function GetRunningSumText(ctl As Control) As String
     
     On Error Resume Next
-    Select Case ctl.RunningSum
-        Case 0: GetRunningSumText = "Non"
-        Case 1: GetRunningSumText = "Sur tout"
-        Case 2: GetRunningSumText = "Sur groupe"
-        Case Else: GetRunningSumText = "N/A"
-    End Select
-    If Err.Number <> 0 Then GetRunningSumText = "N/A"
+    Dim runningSumValue As Variant
+    runningSumValue = ctl.RunningSum
+    
+    If Err.Number = 0 Then
+        Select Case runningSumValue
+            Case 0: GetRunningSumText = "Non"
+            Case 1: GetRunningSumText = "Sur tout"
+            Case 2: GetRunningSumText = "Sur groupe"
+            Case Else: GetRunningSumText = "N/A"
+        End Select
+    Else
+        GetRunningSumText = "N/A"
+    End If
+    
     On Error GoTo 0
     
 End Function
