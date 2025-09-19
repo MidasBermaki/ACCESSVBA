@@ -1,560 +1,361 @@
 Option Compare Database
 Option Explicit
 
-' Structure pour stocker les informations des contrôles
-Type ControlInfo
-    ControlName As String
-    ControlType As String
-    ControlSource As String
-    RunningSum As String
-    Expression As String
-    ReferencedFields As String
-    Section As String
-    Parent As String
-End Type
-
-' Structure pour stocker les informations des états
-Type ReportInfo
-    ReportName As String
-    RecordSource As String
-    Controls() As ControlInfo
-    ControlCount As Integer
-End Type
-
-Public Sub AnalyzeAllReports()
+Public Sub DocumenterTousLesEtats()
+    On Error GoTo ErreurHandler
     
-    On Error GoTo ErrorHandler
+    Dim db As Database
+    Dim objRpt As AccessObject
+    Dim rpt As Report
+    Dim ctrl As Control
+    Dim xlApp As Object, xlWB As Object, xlWS As Object
+    Dim ligne As Integer
+    Dim cheminFichier As String
+    Dim nomFichier As String
     
-    Dim db As DAO.Database
-    Dim doc As DAO.Document
-    Dim rpt As Access.Report
-    Dim xlApp As Object
-    Dim xlWb As Object
-    Dim xlWs As Object
-    Dim reports() As ReportInfo
-    Dim reportCount As Integer
-    Dim i As Integer, j As Integer
-    Dim currentRow As Long
+    ' Vérifier si Excel est disponible
+    If Not IsExcelInstalled() Then
+        MsgBox "Excel n'est pas installé sur ce système.", vbCritical
+        Exit Sub
+    End If
     
-    ' Initialisation
-    Set db = CurrentDb()
-    reportCount = 0
-    currentRow = 2
-    
-    ' Création de l'application Excel
+    ' Initialisation Excel
     Set xlApp = CreateObject("Excel.Application")
+    Set xlWB = xlApp.Workbooks.Add
+    Set xlWS = xlWB.Sheets(1)
     xlApp.Visible = True
-    Set xlWb = xlApp.Workbooks.Add
-    Set xlWs = xlWb.Worksheets(1)
-    xlWs.Name = "Documentation_Etats"
     
-    ' Création des en-têtes
-    Call CreateHeaders(xlWs)
-    
-    ' Parcours de tous les états
-    For Each doc In db.Containers("Reports").Documents
-        DoEvents ' Permet à Access de traiter les événements
+    ' Configuration de la feuille Excel
+    With xlWS
+        .Range("A1").Value = "Nom état"
+        .Range("B1").Value = "Section"
+        .Range("C1").Value = "Nom contrôle"
+        .Range("D1").Value = "Type contrôle"
+        .Range("E1").Value = "Source données"
+        .Range("F1").Value = "Expression"
+        .Range("G1").Value = "Requête source"
+        .Range("H1").Value = "Table source"
+        .Range("I1").Value = "Format"
+        .Range("J1").Value = "Visible"
+        .Range("K1").Value = "Libellé"
+        .Range("L1").Value = "Description"
         
+        ' Mise en forme des en-têtes
+        .Rows(1).Font.Bold = True
+        .Rows(1).HorizontalAlignment = -4108 ' Centre
+    End With
+    
+    ligne = 2
+    Set db = CurrentDb()
+    
+    ' Parcourir tous les états
+    For Each objRpt In CurrentProject.AllReports
         On Error Resume Next
-        
-        ' Ouvrir l'état en mode Design
-        DoCmd.OpenReport doc.Name, acViewDesign, , , acHidden
-        
-        If Err.Number = 0 Then
-            ' Accéder à l'état ouvert
-            Set rpt = Reports(doc.Name)
-            
-            If Not rpt Is Nothing Then
-                ' Redimensionner le tableau si nécessaire
-                reportCount = reportCount + 1
-                ReDim Preserve reports(1 To reportCount)
-                
-                ' Analyser l'état
-                Call AnalyzeReport(rpt, reports(reportCount))
-                
-                ' Mettre à jour la barre de progression
-                Debug.Print "Analyse de l'état: " & doc.Name & " terminée"
-            End If
-            
-            ' Fermer l'état
-            DoCmd.Close acReport, doc.Name, acSaveNo
+        DoCmd.OpenReport objRpt.Name, acViewDesign, , , acHidden
+        If Err.Number <> 0 Then
+            Debug.Print "Impossible d'ouvrir l'état: " & objRpt.Name & " - " & Err.Description
+            Err.Clear
+            GoNextRpt:
         Else
-            Debug.Print "Impossible d'ouvrir l'état: " & doc.Name & " - Erreur: " & Err.Description
+            Set rpt = Reports(objRpt.Name)
+            
+            ' Parcourir les contrôles de l'état
+            For Each ctrl In rpt.Controls
+                With xlWS
+                    .Cells(ligne, 1).Value = objRpt.Name
+                    .Cells(ligne, 2).Value = ObtenirNomSection(ctrl.Section)
+                    .Cells(ligne, 3).Value = ctrl.Name
+                    .Cells(ligne, 4).Value = TypeName(ctrl)
+                    
+                    ' Analyser les sources de données selon le type de contrôle
+                    Select Case ctrl.ControlType
+                    Case acTextBox
+                        .Cells(ligne, 5).Value = Nz(ctrl.ControlSource, "")
+                        If Nz(ctrl.ControlSource, "") <> "" Then
+                            If Left(ctrl.ControlSource, 1) = "=" Then
+                                .Cells(ligne, 6).Value = ctrl.ControlSource
+                            Else
+                                .Cells(ligne, 5).Value = ctrl.ControlSource
+                                AnalyserSourceDonnees db, ctrl.ControlSource, xlWS, ligne
+                            End If
+                        End If
+                    Case acComboBox, acListBox
+                        .Cells(ligne, 5).Value = Nz(ctrl.RowSource, "")
+                        AnalyserSourceDonnees db, ctrl.RowSource, xlWS, ligne
+                    Case acLabel
+                        .Cells(ligne, 11).Value = Nz(ctrl.Caption, "")
+                    Case Else
+                        .Cells(ligne, 5).Value = Nz(ctrl.ControlSource, "")
+                    End Select
+                    
+                    ' Propriétés supplémentaires
+                    .Cells(ligne, 9).Value = Nz(ctrl.Format, "")
+                    .Cells(ligne, 10).Value = ctrl.Visible
+                    
+                    ligne = ligne + 1
+                End With
+            Next ctrl
+            
+            DoCmd.Close acReport, objRpt.Name, acSaveNo
         End If
+    Next objRpt
+    
+    ' Ajuster la mise en forme Excel
+    With xlWS
+        .Columns("A:L").AutoFit
+        .Rows.AutoFit
         
-        Err.Clear
+        ' Ajouter un tableau Excel pour faciliter le filtrage
+        .ListObjects.Add(xlSrcRange, .Range("A1:L" & (ligne - 1)), , xlYes).Name = "TableauDocumentation"
+        .ListObjects("TableauDocumentation").TableStyle = "TableStyleMedium9"
+    End With
+    
+    ' Sauvegarde automatique
+    nomFichier = "DocumentationEtats_" & Format(Now(), "yyyy-mm-dd_hhmmss") & ".xlsx"
+    cheminFichier = CurrentProject.Path & "\" & nomFichier
+    xlWB.SaveAs cheminFichier
+    
+    ' Fermer Excel
+    xlWB.Close True
+    xlApp.Quit
+    
+    MsgBox "Documentation générée avec succès!" & vbCrLf & "Fichier: " & cheminFichier, vbInformation
+    
+    Nettoyage:
+        Set ctrl = Nothing
         Set rpt = Nothing
-        On Error GoTo ErrorHandler
-        
-    Next doc
-    
-    ' Écrire les données dans Excel
-    For i = 1 To reportCount
-        For j = 0 To reports(i).ControlCount - 1
-            currentRow = currentRow + 1
-            Call WriteToExcel(xlWs, currentRow, reports(i), reports(i).Controls(j))
-        Next j
-    Next i
-    
-    ' Formatage final
-    Call FormatExcelSheet(xlWs, currentRow)
-    
-    ' Sauvegarde du fichier
-    Dim fileName As String
-    fileName = CurrentProject.Path & "\Documentation_Etats_" & Format(Now, "yyyymmdd_hhmmss") & ".xlsx"
-    xlWb.SaveAs fileName
-    
-    MsgBox "Documentation générée avec succès!" & vbCrLf & "Fichier sauvé: " & fileName, vbInformation
-    
+        Set objRpt = Nothing
+        Set db = Nothing
+        Set xlWS = Nothing
+        Set xlWB = Nothing
+        Set xlApp = Nothing
     Exit Sub
     
-ErrorHandler:
-    MsgBox "Erreur: " & Err.Description & " (Code: " & Err.Number & ")", vbCritical
-    If Not xlApp Is Nothing Then xlApp.Quit
-    DoCmd.Close acReport, "", acSaveNo
-    
+ErreurHandler:
+    MsgBox "Erreur " & Err.Number & ": " & Err.Description, vbCritical
+    Resume Nettoyage
 End Sub
 
-Private Sub CreateHeaders(ws As Object)
-    
-    With ws
-        .Cells(1, 1).Value = "Nom de l'État"
-        .Cells(1, 2).Value = "Source de Données"
-        .Cells(1, 3).Value = "Section"
-        .Cells(1, 4).Value = "Nom du Contrôle"
-        .Cells(1, 5).Value = "Type de Contrôle"
-        .Cells(1, 6).Value = "Source du Contrôle"
-        .Cells(1, 7).Value = "Expression/Formule"
-        .Cells(1, 8).Value = "Somme Cumulative"
-        .Cells(1, 9).Value = "Champs Référencés"
-        .Cells(1, 10).Value = "Tables/Requêtes Sources"
-        .Cells(1, 11).Value = "Type de Calcul"
-        .Cells(1, 12).Value = "Dépendances"
-        
-        ' Formatage des en-têtes
-        With .Range("A1:L1")
-            .Font.Bold = True
-            .Interior.Color = RGB(79, 129, 189)
-            .Font.Color = RGB(255, 255, 255)
-            .Borders.LineStyle = 1
-        End With
-    End With
-    
-End Sub
-
-Private Sub AnalyzeReport(rpt As Access.Report, ByRef reportInfo As ReportInfo)
-    
-    Dim ctl As Control
-    Dim controlCount As Integer
-    Dim sectionName As String
-    
-    On Error Resume Next
-    
-    reportInfo.ReportName = rpt.Name
-    reportInfo.RecordSource = Nz(rpt.RecordSource, "")
-    controlCount = 0
-    
-    ' Analyser tous les contrôles dans toutes les sections
-    If Not rpt.ReportHeader Is Nothing Then
-        Call AnalyzeSection(rpt.ReportHeader, "En-tête d'état", reportInfo, controlCount)
-    End If
-    
-    If Not rpt.PageHeader Is Nothing Then
-        Call AnalyzeSection(rpt.PageHeader, "En-tête de page", reportInfo, controlCount)
-    End If
-    
-    If Not rpt.Detail Is Nothing Then
-        Call AnalyzeSection(rpt.Detail, "Détail", reportInfo, controlCount)
-    End If
-    
-    If Not rpt.ReportFooter Is Nothing Then
-        Call AnalyzeSection(rpt.ReportFooter, "Pied d'état", reportInfo, controlCount)
-    End If
-    
-    If Not rpt.PageFooter Is Nothing Then
-        Call AnalyzeSection(rpt.PageFooter, "Pied de page", reportInfo, controlCount)
-    End If
-    
-    ' Analyser les groupes s'ils existent
-    Dim i As Integer
-    If rpt.GroupLevel > 0 Then
-        For i = 0 To rpt.GroupLevel - 1
-            If Not rpt.GroupHeader(i) Is Nothing Then
-                Call AnalyzeSection(rpt.GroupHeader(i), "En-tête de groupe " & (i + 1), reportInfo, controlCount)
-            End If
-            If Not rpt.GroupFooter(i) Is Nothing Then
-                Call AnalyzeSection(rpt.GroupFooter(i), "Pied de groupe " & (i + 1), reportInfo, controlCount)
-            End If
-        Next i
-    End If
-    
-    reportInfo.ControlCount = controlCount
-    
-    On Error GoTo 0
-    
-End Sub
-
-Private Sub AnalyzeSection(sect As Section, sectionName As String, ByRef reportInfo As ReportInfo, ByRef controlCount As Integer)
-    
-    Dim ctl As Control
-    
-    On Error Resume Next
-    
-    If sect Is Nothing Then Exit Sub
-    
-    For Each ctl In sect.Controls
-        controlCount = controlCount + 1
-        ReDim Preserve reportInfo.Controls(0 To controlCount - 1)
-        
-        With reportInfo.Controls(controlCount - 1)
-            .ControlName = Nz(ctl.Name, "Contrôle_" & controlCount)
-            .Section = sectionName
-            .Parent = reportInfo.ReportName
-            
-            ' Type de contrôle
-            .ControlType = GetControlTypeName(ctl.ControlType)
-            
-            ' Source du contrôle avec gestion d'erreur
-            .ControlSource = ""
-            If HasProperty(ctl, "ControlSource") Then
-                .ControlSource = Nz(ctl.ControlSource, "")
-            End If
-            
-            ' Somme cumulative avec gestion d'erreur
-            .RunningSum = "N/A"
-            If HasProperty(ctl, "RunningSum") Then
-                .RunningSum = GetRunningSumText(ctl)
-            End If
-            
-            ' Expression/Formule
-            .Expression = ExtractExpression(.ControlSource)
-            
-            ' Champs référencés
-            .ReferencedFields = ExtractReferencedFields(.ControlSource, .Expression)
-            
-        End With
-    Next ctl
-    
-    On Error GoTo 0
-    
-End Sub
-
-' Fonction utilitaire pour vérifier si un objet a une propriété
-Private Function HasProperty(obj As Object, propName As String) As Boolean
-    Dim tempVar As Variant
-    On Error Resume Next
-    tempVar = CallByName(obj, propName, VbGet)
-    HasProperty = (Err.Number = 0)
-    On Error GoTo 0
-End Function
-
-' Fonction Nz personnalisée pour compatibilité
-Private Function Nz(value As Variant, Optional valueIfNull As Variant = "") As Variant
-    If IsNull(value) Or value = "" Then
-        Nz = valueIfNull
-    Else
-        Nz = value
-    End If
-End Function
-
-Private Function GetControlTypeName(ctlType As Integer) As String
-    
-    Select Case ctlType
-        Case acLabel: GetControlTypeName = "Étiquette"
-        Case acTextBox: GetControlTypeName = "Zone de texte"
-        Case acComboBox: GetControlTypeName = "Zone de liste déroulante"
-        Case acListBox: GetControlTypeName = "Zone de liste"
-        Case acCommandButton: GetControlTypeName = "Bouton de commande"
-        Case acImage: GetControlTypeName = "Image"
-        Case acUnboundObjectFrame: GetControlTypeName = "Cadre d'objet indépendant"
-        Case acBoundObjectFrame: GetControlTypeName = "Cadre d'objet dépendant"
-        Case acCheckBox: GetControlTypeName = "Case à cocher"
-        Case acOptionButton: GetControlTypeName = "Case d'option"
-        Case acOptionGroup: GetControlTypeName = "Groupe d'options"
-        Case acRectangle: GetControlTypeName = "Rectangle"
-        Case acLine: GetControlTypeName = "Ligne"
-        Case acSubform: GetControlTypeName = "Sous-formulaire"
-        Case acPageBreak: GetControlTypeName = "Saut de page"
-        Case acToggleButton: GetControlTypeName = "Bouton bascule"
-        Case Else: GetControlTypeName = "Autre (" & ctlType & ")"
+Private Function ObtenirNomSection(section As Section) As String
+    Select Case section
+        Case 0: ObtenirNomSection = "Détail"
+        Case 1: ObtenirNomSection = "En-tête"
+        Case 2: ObtenirNomSection = "Pied de page"
+        Case 3: ObtenirNomSection = "En-tête de page"
+        Case 4: ObtenirNomSection = "Pied de page"
+        Case 5: ObtenirNomSection = "En-tête de groupe"
+        Case 6: ObtenirNomSection = "Pied de groupe"
+        Case Else: ObtenirNomSection = "Inconnu (" & section & ")"
     End Select
-    
 End Function
 
-Private Function GetRunningSumText(ctl As Control) As String
-    
+Private Sub AnalyserSourceDonnees(db As Database, source As String, xlWS As Object, ligne As Integer)
     On Error Resume Next
-    Dim runningSumValue As Variant
-    runningSumValue = ctl.RunningSum
     
-    If Err.Number = 0 Then
-        Select Case runningSumValue
-            Case 0: GetRunningSumText = "Non"
-            Case 1: GetRunningSumText = "Sur tout"
-            Case 2: GetRunningSumText = "Sur groupe"
-            Case Else: GetRunningSumText = "N/A"
-        End Select
-    Else
-        GetRunningSumText = "N/A"
-    End If
-    
-    On Error GoTo 0
-    
-End Function
-
-Private Function ExtractExpression(controlSource As String) As String
-    
-    If Left(controlSource, 1) = "=" Then
-        ExtractExpression = controlSource
-    Else
-        ExtractExpression = "Champ direct: " & controlSource
-    End If
-    
-End Function
-
-Private Function ExtractReferencedFields(controlSource As String, expression As String) As String
-    
-    Dim fields As String
     Dim i As Integer
-    Dim char As String
-    Dim inBrackets As Boolean
-    Dim currentField As String
-    Dim fieldList As String
+    Dim qdf As QueryDef
+    Dim tdf As TableDef
+    Dim sql As String
+    Dim nomSource As String
     
-    If controlSource = "" Or controlSource = "N/A" Then
-        ExtractReferencedFields = "Aucun"
-        Exit Function
-    End If
+    ' Nettoyer la source (enlever les éventuels points-virgules)
+    nomSource = Replace(source, ";", "")
     
-    ' Si c'est une expression (commence par =)
-    If Left(controlSource, 1) = "=" Then
-        ' Extraire les noms de champs entre crochets [NomChamp]
-        For i = 1 To Len(controlSource)
-            char = Mid(controlSource, i, 1)
-            If char = "[" Then
-                inBrackets = True
-                currentField = ""
-            ElseIf char = "]" And inBrackets Then
-                inBrackets = False
-                If currentField <> "" Then
-                    If fieldList = "" Then
-                        fieldList = currentField
-                    Else
-                        If InStr(fieldList, currentField) = 0 Then
-                            fieldList = fieldList & ", " & currentField
-                        End If
-                    End If
-                End If
-            ElseIf inBrackets Then
-                currentField = currentField & char
-            End If
-        Next i
-        
-        If fieldList = "" Then
-            ExtractReferencedFields = "Expression complexe"
-        Else
-            ExtractReferencedFields = fieldList
+    ' Vérifier si c'est une requête
+    For Each qdf In db.QueryDefs
+        If qdf.Name = nomSource Then
+            xlWS.Cells(ligne, 7).Value = nomSource
+            xlWS.Cells(ligne, 8).Value = ExtraireTablesRequete(qdf.SQL)
+            Exit For
         End If
-    Else
-        ExtractReferencedFields = controlSource
-    End If
-    
-End Function
-
-Private Sub WriteToExcel(ws As Object, row As Long, reportInfo As ReportInfo, controlInfo As ControlInfo)
-    
-    Dim calculationType As String
-    Dim dependencies As String
-    Dim sourceTables As String
-    
-    ' Déterminer le type de calcul
-    If Left(controlInfo.ControlSource, 1) = "=" Then
-        calculationType = "Formule/Expression"
-    ElseIf controlInfo.RunningSum <> "Non" Then
-        calculationType = "Somme cumulative"
-    ElseIf controlInfo.ControlSource <> "N/A" And controlInfo.ControlSource <> "" Then
-        calculationType = "Champ direct"
-    Else
-        calculationType = "Statique/Étiquette"
-    End If
-    
-    ' Analyser les dépendances
-    dependencies = AnalyzeDependencies(controlInfo.ControlSource, reportInfo.RecordSource)
-    sourceTables = GetSourceTables(reportInfo.RecordSource)
-    
-    With ws
-        .Cells(row, 1).Value = reportInfo.ReportName
-        .Cells(row, 2).Value = reportInfo.RecordSource
-        .Cells(row, 3).Value = controlInfo.Section
-        .Cells(row, 4).Value = controlInfo.ControlName
-        .Cells(row, 5).Value = controlInfo.ControlType
-        .Cells(row, 6).Value = controlInfo.ControlSource
-        .Cells(row, 7).Value = controlInfo.Expression
-        .Cells(row, 8).Value = controlInfo.RunningSum
-        .Cells(row, 9).Value = controlInfo.ReferencedFields
-        .Cells(row, 10).Value = sourceTables
-        .Cells(row, 11).Value = calculationType
-        .Cells(row, 12).Value = dependencies
-    End With
-    
-End Sub
-
-Private Function AnalyzeDependencies(controlSource As String, recordSource As String) As String
-    
-    Dim dependencies As String
-    
-    If Left(controlSource, 1) = "=" Then
-        dependencies = "Dépend de: " & ExtractReferencedFields(controlSource, "")
-        dependencies = dependencies & " | Source: " & recordSource
-    ElseIf controlSource <> "N/A" And controlSource <> "" Then
-        dependencies = "Champ direct de: " & recordSource
-    Else
-        dependencies = "Aucune dépendance"
-    End If
-    
-    AnalyzeDependencies = dependencies
-    
-End Function
-
-Private Function GetSourceTables(recordSource As String) As String
-    
-    Dim db As DAO.Database
-    Dim qdf As DAO.QueryDef
-    Dim tdf As DAO.TableDef
-    Dim found As Boolean
-    
-    Set db = CurrentDb()
-    found = False
+    Next qdf
     
     ' Vérifier si c'est une table
     For Each tdf In db.TableDefs
-        If tdf.Name = recordSource Then
-            GetSourceTables = "Table: " & recordSource
-            found = True
+        If tdf.Name = nomSource And Left(tdf.Name, 4) <> "MSys" Then
+            xlWS.Cells(ligne, 8).Value = nomSource
             Exit For
         End If
     Next tdf
     
-    ' Vérifier si c'est une requête
-    If Not found Then
-        For Each qdf In db.QueryDefs
-            If qdf.Name = recordSource Then
-                GetSourceTables = "Requête: " & recordSource & " | SQL: " & Left(qdf.SQL, 100) & "..."
-                found = True
-                Exit For
+    ' Vérifier si c'est une expression SQL directe
+    If InStr(1, nomSource, "SELECT", vbTextCompare) > 0 Or _
+       InStr(1, nomSource, "FROM", vbTextCompare) > 0 Then
+        xlWS.Cells(ligne, 8).Value = ExtraireTablesRequete(nomSource)
+    End If
+End Sub
+
+Private Function ExtraireTablesRequete(sql As String) As String
+    Dim mots() As String
+    Dim i As Integer
+    Dim dansFrom As Boolean
+    Dim tables As String
+    
+    If sql = "" Then Exit Function
+    
+    ' Normaliser le SQL
+    sql = Replace(Replace(sql, vbCrLf, " "), vbTab, " ")
+    mots = Split(sql, " ")
+    
+    dansFrom = False
+    For i = LBound(mots) To UBound(mots)
+        If UCase(mots(i)) = "FROM" Then
+            dansFrom = True
+        ElseIf dansFrom And UCase(mots(i)) = "WHERE" Then
+            Exit For
+        ElseIf dansFrom And UCase(mots(i)) = "ORDER" Then
+            Exit For
+        ElseIf dansFrom And UCase(mots(i)) = "GROUP" Then
+            Exit For
+        ElseIf dansFrom And mots(i) <> "" And UCase(mots(i)) <> "INNER" And _
+               UCase(mots(i)) <> "LEFT" And UCase(mots(i)) <> "RIGHT" And _
+               UCase(mots(i)) <> "JOIN" And UCase(mots(i)) <> "ON" Then
+            If InStr(mots(i), ".") > 0 Then
+                tables = tables & Split(mots(i), ".")(1) & "; "
+            Else
+                tables = tables & mots(i) & "; "
             End If
-        Next qdf
-    End If
+        End If
+    Next i
     
-    If Not found Then
-        GetSourceTables = "Source non identifiée: " & recordSource
-    End If
-    
+    ExtraireTablesRequete = Left(tables, Len(tables) - 2) ' Enlever le dernier "; "
 End Function
 
-Private Sub FormatExcelSheet(ws As Object, lastRow As Long)
+Private Function IsExcelInstalled() As Boolean
+    On Error Resume Next
+    Dim xl As Object
+    Set xl = CreateObject("Excel.Application")
+    If Err.Number = 0 Then
+        IsExcelInstalled = True
+        xl.Quit
+    Else
+        IsExcelInstalled = False
+    End If
+    Set xl = Nothing
+End Function
+
+' Fonction pour documenter également les paramètres des états
+Public Sub DocumenterParametresEtats()
+    On Error GoTo ErreurHandler
     
-    With ws
-        ' Ajustement automatique des colonnes
-        .Columns.AutoFit
+    Dim db As Database
+    Dim objRpt As AccessObject
+    Dim rpt As Report
+    Dim ctrl As Control
+    Dim xlApp As Object, xlWB As Object, xlWS As Object
+    Dim ligne As Integer
+    Dim cheminFichier As String
+    Dim nomFichier As String
+    
+    ' Initialisation Excel
+    Set xlApp = CreateObject("Excel.Application")
+    Set xlWB = xlApp.Workbooks.Add
+    Set xlWS = xlWB.Sheets(1)
+    xlApp.Visible = True
+    
+    ' Configuration de la feuille Excel
+    With xlWS
+        .Range("A1").Value = "Nom état"
+        .Range("B1").Value = "Paramètre"
+        .Range("C1").Value = "Type données"
+        .Range("D1").Value = "Valeur par défaut"
+        .Range("E1").Value = "Description"
         
-        ' Formatage conditionnel pour les types de calculs
-        Dim rng As Object
-        Set rng = .Range("K2:K" & lastRow)
-        
-        ' Bordures
-        .Range("A1:L" & lastRow).Borders.LineStyle = 1
-        
-        ' Couleurs alternées
-        Dim i As Long
-        For i = 2 To lastRow Step 2
-            .Range("A" & i & ":L" & i).Interior.Color = RGB(242, 242, 242)
-        Next i
-        
-        ' Figer la première ligne
-        .Rows(2).Select
-        .Application.ActiveWindow.FreezePanes = True
-        .Cells(1, 1).Select
-        
-        ' Ajouter des filtres
-        .Range("A1:L1").AutoFilter
-        
+        ' Mise en forme des en-têtes
+        .Rows(1).Font.Bold = True
+        .Rows(1).HorizontalAlignment = -4108 ' Centre
     End With
     
-End Sub
-
-' Fonction utilitaire pour créer un rapport de synthèse
-Public Sub CreateSummaryReport()
-    
-    Dim xlApp As Object
-    Dim xlWb As Object
-    Dim xlWs As Object
-    
-    Set xlApp = CreateObject("Excel.Application")
-    xlApp.Visible = True
-    Set xlWb = xlApp.Workbooks.Add
-    Set xlWs = xlWb.Worksheets(1)
-    xlWs.Name = "Synthese_Base_Donnees"
-    
-    ' Créer un rapport de synthèse de la base de données
-    Call CreateDatabaseSummary(xlWs)
-    
-    Dim fileName As String
-    fileName = CurrentProject.Path & "\Synthese_BD_" & Format(Now, "yyyymmdd_hhmmss") & ".xlsx"
-    xlWb.SaveAs fileName
-    
-    MsgBox "Rapport de synthèse créé: " & fileName, vbInformation
-    
-End Sub
-
-Private Sub CreateDatabaseSummary(ws As Object)
-    
-    Dim db As DAO.Database
-    Dim doc As DAO.Document
-    Dim currentRow As Long
-    
+    ligne = 2
     Set db = CurrentDb()
-    currentRow = 1
     
-    ' En-têtes
-    ws.Cells(currentRow, 1).Value = "Nom de la Base"
-    ws.Cells(currentRow, 2).Value = CurrentProject.Name
-    currentRow = currentRow + 2
-    
-    ' Tables
-    ws.Cells(currentRow, 1).Value = "TABLES:"
-    ws.Cells(currentRow, 1).Font.Bold = True
-    currentRow = currentRow + 1
-    
-    For Each doc In db.Containers("Tables").Documents
-        If Left(doc.Name, 4) <> "MSys" Then
-            ws.Cells(currentRow, 2).Value = doc.Name
-            currentRow = currentRow + 1
+    ' Parcourir tous les états
+    For Each objRpt In CurrentProject.AllReports
+        On Error Resume Next
+        
+        ' Vérifier si l'état a des paramètres
+        If EtatAParametres(objRpt.Name) Then
+            .Cells(ligne, 1).Value = objRpt.Name
+            .Cells(ligne, 2).Value = "Date de début"
+            .Cells(ligne, 3).Value = "Date/Heure"
+            .Cells(ligne, 4).Value = "Paramètre utilisateur"
+            ligne = ligne + 1
+            
+            .Cells(ligne, 1).Value = objRpt.Name
+            .Cells(ligne, 2).Value = "Date de fin"
+            .Cells(ligne, 3).Value = "Date/Heure"
+            .Cells(ligne, 4).Value = "Paramètre utilisateur"
+            ligne = ligne + 1
         End If
-    Next doc
+    Next objRpt
     
-    currentRow = currentRow + 1
+    ' Ajuster la mise en forme Excel
+    With xlWS
+        .Columns("A:E").AutoFit
+        .Rows.AutoFit
+        
+        ' Ajouter un tableau Excel
+        .ListObjects.Add(xlSrcRange, .Range("A1:E" & (ligne - 1)), , xlYes).Name = "TableauParametres"
+        .ListObjects("TableauParametres").TableStyle = "TableStyleMedium9"
+    End With
     
-    ' Requêtes
-    ws.Cells(currentRow, 1).Value = "REQUÊTES:"
-    ws.Cells(currentRow, 1).Font.Bold = True
-    currentRow = currentRow + 1
+    ' Sauvegarde automatique
+    nomFichier = "DocumentationParametresEtats_" & Format(Now(), "yyyy-mm-dd_hhmmss") & ".xlsx"
+    cheminFichier = CurrentProject.Path & "\" & nomFichier
+    xlWB.SaveAs cheminFichier
     
-    For Each doc In db.Containers("Queries").Documents
-        ws.Cells(currentRow, 2).Value = doc.Name
-        currentRow = currentRow + 1
-    Next doc
+    ' Fermer Excel
+    xlWB.Close True
+    xlApp.Quit
     
-    currentRow = currentRow + 1
+    MsgBox "Documentation des paramètres générée avec succès!" & vbCrLf & "Fichier: " & cheminFichier, vbInformation
     
-    ' États
-    ws.Cells(currentRow, 1).Value = "ÉTATS:"
-    ws.Cells(currentRow, 1).Font.Bold = True
-    currentRow = currentRow + 1
+    Nettoyage:
+        Set ctrl = Nothing
+        Set rpt = Nothing
+        Set objRpt = Nothing
+        Set db = Nothing
+        Set xlWS = Nothing
+        Set xlWB = Nothing
+        Set xlApp = Nothing
+    Exit Sub
     
-    For Each doc In db.Containers("Reports").Documents
-        ws.Cells(currentRow, 2).Value = doc.Name
-        currentRow = currentRow + 1
-    Next doc
-    
+ErreurHandler:
+    MsgBox "Erreur " & Err.Number & ": " & Err.Description, vbCritical
+    Resume Nettoyage
 End Sub
+
+Private Function EtatAParametres(nomEtat As String) As Boolean
+    ' Cette fonction détecte si un état demande des paramètres à l'ouverture
+    ' Méthode simple: vérifier si l'état contient des références à [Date de début] ou [Date de fin]
+    On Error Resume Next
+    Dim rpt As Report
+    Dim hasParams As Boolean
+    
+    hasParams = False
+    
+    DoCmd.OpenReport nomEtat, acViewDesign, , , acHidden
+    If Err.Number = 0 Then
+        Set rpt = Reports(nomEtat)
+        
+        ' Vérifier le source de l'état
+        If InStr(1, rpt.RecordSource, "[Date de début]", vbTextCompare) > 0 Or _
+           InStr(1, rpt.RecordSource, "[Date de fin]", vbTextCompare) > 0 Then
+            hasParams = True
+        Else
+            ' Vérifier les contrôles
+            Dim ctrl As Control
+            For Each ctrl In rpt.Controls
+                If InStr(1, Nz(ctrl.ControlSource, ""), "[Date de début]", vbTextCompare) > 0 Or _
+                   InStr(1, Nz(ctrl.ControlSource, ""), "[Date de fin]", vbTextCompare) > 0 Then
+                    hasParams = True
+                    Exit For
+                End If
+            Next ctrl
+        End If
+        
+        DoCmd.Close acReport, nomEtat, acSaveNo
+    End If
+    
+    EtatAParametres = hasParams
+End Function
