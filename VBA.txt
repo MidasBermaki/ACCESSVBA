@@ -1,0 +1,331 @@
+Option Compare Database
+Option Explicit
+
+' ExportReportDocumentation
+' Usage : exécutez cette Sub, entrez le nom exact de l'état (report) à documenter.
+' Résultat : un fichier Excel créé dans le dossier du projet Access (CurrentProject.Path)
+' Contenu : onglets ReportInfo, Controls, Queries, Tables.
+'
+' Portable : utilise late-binding pour Excel, n'exige pas d'ajouter la référence "Microsoft Excel x.x Object Library".
+
+Public Sub ExportReportDocumentation()
+    On Error GoTo ErrHandler
+    Dim rptName As String
+    rptName = Trim(InputBox("Nom exact de l'état (Report) à documenter :", "Exporter documentation état"))
+    If rptName = "" Then Exit Sub
+
+    ' --- Ouvrir l'état en mode création (caché) pour lire les contrôles ---
+    On Error Resume Next
+    DoCmd.OpenReport rptName, acViewDesign, , , acHidden
+    If Err.Number <> 0 Then
+        MsgBox "Impossible d'ouvrir l'état '" & rptName & "'. Vérifie le nom exact ou si le fichier est protégé (ACCDE)." & vbCrLf & "Erreur: " & Err.Description, vbExclamation
+        Exit Sub
+    End If
+    On Error GoTo ErrHandler
+
+    Dim rpt As Report
+    Set rpt = Reports(rptName)
+
+    ' --- Initialisation Excel (late binding) ---
+    Dim xlApp As Object, wb As Object
+    Set xlApp = CreateObject("Excel.Application")
+    xlApp.Visible = True
+    Set wb = xlApp.Workbooks.Add
+
+    ' --- Créer/Préparer feuilles ---
+    Dim wsReportInfo As Object, wsControls As Object, wsQueries As Object, wsTables As Object
+    Set wsReportInfo = wb.Sheets(1)
+    wsReportInfo.Name = "ReportInfo"
+
+    wb.Sheets.Add After:=wb.Sheets(wb.Sheets.Count)
+    Set wsControls = wb.Sheets(wb.Sheets.Count)
+    wsControls.Name = "Controls"
+
+    wb.Sheets.Add After:=wb.Sheets(wb.Sheets.Count)
+    Set wsQueries = wb.Sheets(wb.Sheets.Count)
+    wsQueries.Name = "Queries"
+
+    wb.Sheets.Add After:=wb.Sheets(wb.Sheets.Count)
+    Set wsTables = wb.Sheets(wb.Sheets.Count)
+    wsTables.Name = "Tables"
+
+    ' --- Remplir ReportInfo ---
+    wsReportInfo.Range("A1").Value = "ReportName"
+    wsReportInfo.Range("B1").Value = rptName
+    wsReportInfo.Range("A2").Value = "RecordSource"
+    wsReportInfo.Range("B2").Value = Nz(rpt.RecordSource, "")
+    wsReportInfo.Range("A3").Value = "HasGrouping"
+    On Error Resume Next
+    wsReportInfo.Range("B3").Value = rpt.HasModule ' indication si le rapport a un module associé
+    On Error GoTo ErrHandler
+    wsReportInfo.Range("A4").Value = "DateExport"
+    wsReportInfo.Range("B4").Value = Now
+
+    ' --- En-têtes Controls ---
+    Dim headerControls As Variant
+    headerControls = Array("ReportOrigin", "Section", "ControlName", "ControlType", "ControlSource", "IsCalculated", "SourceObject (subreport)", "Visible", "Top", "Left", "Width", "Height", "Tag")
+    Dim i As Integer
+    For i = 0 To UBound(headerControls)
+        wsControls.Cells(1, i + 1).Value = headerControls(i)
+    Next i
+
+    ' --- Parcourir tous les contrôles du report (y compris subreports) ---
+    Dim rowC As Long: rowC = 2
+    Dim ctl As Control
+    Dim cs As String, isCalc As String, srcObj As String
+    For Each ctl In rpt.Controls
+        wsControls.Cells(rowC, 1).Value = rptName
+        wsControls.Cells(rowC, 2).Value = SectionName(ctl.Section)
+        wsControls.Cells(rowC, 3).Value = ctl.Name
+        wsControls.Cells(rowC, 4).Value = ControlTypeName(ctl.ControlType)
+        On Error Resume Next
+        cs = ""
+        cs = ctl.ControlSource
+        If Err.Number <> 0 Then
+            Err.Clear
+            cs = ""
+        End If
+        On Error GoTo ErrHandler
+        wsControls.Cells(rowC, 5).Value = cs
+        isCalc = IIf(IsCalculatedExpression(cs), "Oui", "Non")
+        wsControls.Cells(rowC, 6).Value = isCalc
+
+        srcObj = ""
+        On Error Resume Next
+        srcObj = ctl.SourceObject
+        If Err.Number <> 0 Then
+            Err.Clear
+            srcObj = ""
+        End If
+        On Error GoTo ErrHandler
+        wsControls.Cells(rowC, 7).Value = srcObj
+        wsControls.Cells(rowC, 8).Value = ctl.Visible
+        wsControls.Cells(rowC, 9).Value = ctl.Top
+        wsControls.Cells(rowC, 10).Value = ctl.Left
+        wsControls.Cells(rowC, 11).Value = ctl.Width
+        wsControls.Cells(rowC, 12).Value = ctl.Height
+        On Error Resume Next
+        wsControls.Cells(rowC, 13).Value = ctl.Tag
+        On Error GoTo ErrHandler
+        rowC = rowC + 1
+    Next ctl
+
+    ' --- Requêtes / RecordSource ---
+    wsQueries.Range("A1").Value = "Name"
+    wsQueries.Range("B1").Value = "Type"
+    wsQueries.Range("C1").Value = "Definition / SQL"
+    Dim rsrc As String
+    rsrc = Nz(rpt.RecordSource, "")
+    Dim outRowQ As Long: outRowQ = 2
+
+    If rsrc <> "" Then
+        If LCase(Left(Trim(rsrc), 6)) = "select" Then
+            wsQueries.Cells(outRowQ, 1).Value = "RecordSource (SQL)"
+            wsQueries.Cells(outRowQ, 2).Value = "SQL"
+            wsQueries.Cells(outRowQ, 3).Value = rsrc
+            outRowQ = outRowQ + 1
+        Else
+            ' essayer de trouver une QueryDef du même nom
+            Dim db As Object
+            Set db = CurrentDb
+            Dim qd As Object
+            On Error Resume Next
+            Set qd = db.QueryDefs(rsrc)
+            If Err.Number = 0 Then
+                wsQueries.Cells(outRowQ, 1).Value = qd.Name
+                wsQueries.Cells(outRowQ, 2).Value = "QueryDef"
+                wsQueries.Cells(outRowQ, 3).Value = qd.SQL
+                outRowQ = outRowQ + 1
+                Set qd = Nothing
+            Else
+                ' Probablement une table (ou une requête définie différemment)
+                wsQueries.Cells(outRowQ, 1).Value = rsrc
+                wsQueries.Cells(outRowQ, 2).Value = "Table ou objet"
+                wsQueries.Cells(outRowQ, 3).Value = ""
+                outRowQ = outRowQ + 1
+                Err.Clear
+            End If
+            Set db = Nothing
+        End If
+    Else
+        wsQueries.Cells(outRowQ, 1).Value = "(Aucune RecordSource)"
+        wsQueries.Cells(outRowQ, 2).Value = ""
+        wsQueries.Cells(outRowQ, 3).Value = ""
+    End If
+
+    ' --- Tables : lister schémas pour les tables référencées dans la DB (heuristique) ---
+    wsTables.Range("A1").Value = "TableName"
+    wsTables.Range("B1").Value = "FieldName"
+    wsTables.Range("C1").Value = "DataType"
+    wsTables.Range("D1").Value = "Size"
+    Dim outRowT As Long: outRowT = 2
+
+    Dim tdf As Object, fld As Object
+    Dim allTables As Object
+    Set allTables = CurrentDb.TableDefs
+    Dim nameTbl As String, foundInSQL As Boolean
+
+    ' Heuristique : si RecordSource est table, documenter cette table ; sinon rechercher les tables mentionnées dans les requêtes référencées.
+    If rsrc <> "" And LCase(Left(Trim(rsrc), 6)) <> "select" Then
+        ' si c'est le nom d'une table dans TableDefs => lister ses champs
+        On Error Resume Next
+        Set tdf = CurrentDb.TableDefs(rsrc)
+        If Err.Number = 0 Then
+            For Each fld In tdf.Fields
+                wsTables.Cells(outRowT, 1).Value = tdf.Name
+                wsTables.Cells(outRowT, 2).Value = fld.Name
+                wsTables.Cells(outRowT, 3).Value = FieldTypeName(fld.Type)
+                wsTables.Cells(outRowT, 4).Value = IIf(IsNull(GetFieldSize(fld)), "", GetFieldSize(fld))
+                outRowT = outRowT + 1
+            Next fld
+            Set tdf = Nothing
+        Else
+            Err.Clear
+        End If
+        On Error GoTo ErrHandler
+    End If
+
+    ' --- Optionnel : parcourir toutes les QueryDefs et détecter tables mentionnées, lister leur schéma (heuristique) ---
+    On Error Resume Next
+    Dim q As Object
+    For Each q In CurrentDb.QueryDefs
+        Dim sSQL As String
+        sSQL = LCase(Nz(q.SQL, ""))
+        ' rechercher si le nom d'une table (sans préfixe) apparaît dans le SQL (heuristique simple)
+        For Each tdf In allTables
+            nameTbl = LCase(tdf.Name)
+            If InStr(sSQL, "[" & nameTbl & "]") > 0 Or InStr(sSQL, " " & nameTbl & " ") > 0 Then
+                ' documenter la table (si pas déjà listée)
+                Dim alreadyListed As Boolean: alreadyListed = False
+                Dim checkR As Long
+                For checkR = 2 To outRowT - 1
+                    If LCase(wsTables.Cells(checkR, 1).Value) = nameTbl Then
+                        alreadyListed = True: Exit For
+                    End If
+                Next checkR
+                If Not alreadyListed Then
+                    For Each fld In tdf.Fields
+                        wsTables.Cells(outRowT, 1).Value = tdf.Name
+                        wsTables.Cells(outRowT, 2).Value = fld.Name
+                        wsTables.Cells(outRowT, 3).Value = FieldTypeName(fld.Type)
+                        wsTables.Cells(outRowT, 4).Value = IIf(IsNull(GetFieldSize(fld)), "", GetFieldSize(fld))
+                        outRowT = outRowT + 1
+                    Next fld
+                End If
+            End If
+        Next tdf
+    Next q
+    On Error GoTo ErrHandler
+
+    ' --- Mise en forme / autosize ---
+    wsControls.Columns.AutoFit
+    wsReportInfo.Columns.AutoFit
+    wsQueries.Columns.AutoFit
+    wsTables.Columns.AutoFit
+
+    ' --- Sauvegarder le fichier Excel dans le dossier du projet Access ---
+    Dim sFile As String
+    sFile = CurrentProject.Path & "\Doc_Etat_" & CleanFileName(rptName) & "_" & Format(Now, "yyyymmdd_HHNNSS") & ".xlsx"
+    wb.SaveAs sFile
+
+    MsgBox "Documentation générée avec succès :" & vbCrLf & sFile, vbInformation
+
+Cleanup:
+    On Error Resume Next
+    ' fermer l'état (sans sauvegarder la conception)
+    DoCmd.Close acReport, rptName, acSaveNo
+    Set rpt = Nothing
+    If Not wb Is Nothing Then
+        ' laisser Excel ouvert avec le fichier pour l'utilisateur
+    End If
+    Exit Sub
+
+ErrHandler:
+    MsgBox "Erreur " & Err.Number & " : " & Err.Description, vbCritical
+    Resume Cleanup
+End Sub
+
+' ----------------- Fonctions utilitaires -----------------
+
+Private Function ControlTypeName(ctrlType As Long) As String
+    Select Case ctrlType
+        Case acLabel: ControlTypeName = "Label"
+        Case acTextBox: ControlTypeName = "TextBox"
+        Case acCommandButton: ControlTypeName = "CommandButton"
+        Case acComboBox: ControlTypeName = "ComboBox"
+        Case acListBox: ControlTypeName = "ListBox"
+        Case acSubform: ControlTypeName = "Subform/Subreport"
+        Case acOptionGroup: ControlTypeName = "OptionGroup"
+        Case acCheckBox: ControlTypeName = "CheckBox"
+        Case acOptionButton: ControlTypeName = "OptionButton"
+        Case acToggleButton: ControlTypeName = "ToggleButton"
+        Case Else: ControlTypeName = "Autre (" & ctrlType & ")"
+    End Select
+End Function
+
+Private Function SectionName(sec As Long) As String
+    Select Case sec
+        Case acDetail: SectionName = "Detail"
+        Case acHeader: SectionName = "PageHeader"
+        Case acFooter: SectionName = "PageFooter"
+        Case acGroupLevel1Header To acGroupLevel4Footer
+            SectionName = "Group"
+        Case Else: SectionName = "Section_" & sec
+    End Select
+End Function
+
+Private Function IsCalculatedExpression(cs As String) As Boolean
+    If Trim(cs) = "" Then
+        IsCalculatedExpression = False: Exit Function
+    End If
+    Dim s As String
+    s = LCase(Trim(cs))
+    ' si commence par = ou contient des fonctions ou opérateurs => calculé
+    If Left(s, 1) = "=" Then IsCalculatedExpression = True: Exit Function
+    If InStr(s, "(") > 0 Or InStr(s, "+") > 0 Or InStr(s, "-") > 0 Or InStr(s, "*") > 0 Or InStr(s, "/") > 0 Then
+        IsCalculatedExpression = True: Exit Function
+    End If
+    ' présence de fonction typique
+    If InStr(s, "iif(") > 0 Or InStr(s, "nz(") > 0 Or InStr(s, "format(") > 0 Or InStr(s, "datepart(") > 0 Then
+        IsCalculatedExpression = True: Exit Function
+    End If
+    ' sinon probablement lié directement à un champ
+    IsCalculatedExpression = False
+End Function
+
+Private Function FieldTypeName(t As Integer) As String
+    Select Case t
+        Case dbText: FieldTypeName = "Text"
+        Case dbMemo: FieldTypeName = "Memo/LongText"
+        Case dbByte: FieldTypeName = "Byte"
+        Case dbInteger: FieldTypeName = "Integer"
+        Case dbLong: FieldTypeName = "Long"
+        Case dbCurrency: FieldTypeName = "Currency"
+        Case dbSingle: FieldTypeName = "Single"
+        Case dbDouble: FieldTypeName = "Double"
+        Case dbDate: FieldTypeName = "DateTime"
+        Case dbBoolean: FieldTypeName = "Boolean"
+        Case dbLongBinary: FieldTypeName = "OLE/Attachment"
+        Case Else: FieldTypeName = "Type_" & t
+    End Select
+End Function
+
+Private Function CleanFileName(s As String) As String
+    Dim badChars As String: badChars = "/\[]:;=,?*""<>|"
+    Dim i As Integer
+    CleanFileName = s
+    For i = 1 To Len(badChars)
+        CleanFileName = Replace(CleanFileName, Mid(badChars, i, 1), "_")
+    Next i
+End Function
+
+' Récupérer la taille (precision) d'un champ si disponible (utile pour text length)
+Private Function GetFieldSize(fld As Object) As Variant
+    On Error Resume Next
+    GetFieldSize = fld.Size
+    If Err.Number <> 0 Then
+        Err.Clear
+        GetFieldSize = Null
+    End If
+    On Error GoTo 0
+End Function
