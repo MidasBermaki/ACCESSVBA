@@ -3,7 +3,9 @@ Option Explicit
 
 ' Module de documentation Access
 Public Sub DocumenterBaseAccess()
-    Dim db As Database
+    On Error GoTo ErreurHandler
+    
+    Dim db As DAO.Database
     Dim xlApp As Object
     Dim xlWB As Object
     Dim xlWS As Object
@@ -11,8 +13,6 @@ Public Sub DocumenterBaseAccess()
     Dim dossierExport As String
     Dim nomFichier As String
     Dim timestamp As String
-    
-    On Error GoTo ErreurHandler
     
     ' Créer le dossier d'export
     timestamp = Format(Now(), "yyyy-mm-dd_hh-nn-ss")
@@ -23,31 +23,39 @@ Public Sub DocumenterBaseAccess()
         fso.CreateFolder dossierExport
     End If
     
-    ' Créer Excel
-    Set xlApp = CreateObject("Excel.Application")
+    ' Vérifier si Excel est installé
+    On Error Resume Next
+    Set xlApp = GetObject(, "Excel.Application")
+    If Err.Number <> 0 Then
+        Set xlApp = CreateObject("Excel.Application")
+    End If
+    On Error GoTo ErreurHandler
+    
+    If xlApp Is Nothing Then
+        MsgBox "Excel n'est pas installé sur ce système.", vbCritical
+        Exit Sub
+    End If
+    
     xlApp.Visible = True
     Set xlWB = xlApp.Workbooks.Add
     xlApp.DisplayAlerts = False
     
+    Set db = CurrentDb
+    
     ' Documenter les Tables
-    Set xlWS = xlWB.Worksheets.Add
+    Set xlWS = xlWB.Worksheets(1)
     xlWS.Name = "Tables"
-    DocumenterTables xlWS
+    DocumenterTables db, xlWS
     
     ' Documenter les Requêtes
-    Set xlWS = xlWB.Worksheets.Add
+    Set xlWS = xlWB.Worksheets.Add(After:=xlWB.Worksheets(xlWB.Worksheets.Count))
     xlWS.Name = "Requêtes"
-    DocumenterRequetes xlWS
+    DocumenterRequetes db, xlWS
     
     ' Documenter les États
-    Set xlWS = xlWB.Worksheets.Add
+    Set xlWS = xlWB.Worksheets.Add(After:=xlWB.Worksheets(xlWB.Worksheets.Count))
     xlWS.Name = "États"
     DocumenterEtats xlWS, dossierExport
-    
-    ' Documenter les Formulaires
-    Set xlWS = xlWB.Worksheets.Add
-    xlWS.Name = "Formulaires"
-    DocumenterFormulaires xlWS
     
     ' Sauvegarder le fichier Excel
     nomFichier = dossierExport & "\Documentation_Complete_" & timestamp & ".xlsx"
@@ -59,6 +67,8 @@ Public Sub DocumenterBaseAccess()
 Nettoyage:
     On Error Resume Next
     Set xlWS = Nothing
+    If Not xlWB Is Nothing Then xlWB.Close False
+    If Not xlApp Is Nothing Then xlApp.Quit
     Set xlWB = Nothing
     Set xlApp = Nothing
     Set db = Nothing
@@ -66,30 +76,28 @@ Nettoyage:
     Exit Sub
     
 ErreurHandler:
-    MsgBox "Erreur: " & Err.Description & " (Line: " & Erl & ")", vbCritical
+    MsgBox "Erreur " & Err.Number & ": " & Err.Description, vbCritical
     Resume Nettoyage
 End Sub
 
 ' Documenter les Tables
-Private Sub DocumenterTables(ws As Object)
-    Dim db As Database
-    Dim tdf As TableDef
-    Dim fld As Field
-    Dim idx As Index
+Private Sub DocumenterTables(db As DAO.Database, ws As Object)
+    On Error Resume Next
+    
+    Dim tdf As DAO.TableDef
+    Dim fld As DAO.Field
     Dim col As Integer
     Dim ligne As Integer
     
-    Set db = CurrentDb
-    
     ' En-têtes
     With ws
-        .Cells(1, 1) = "Nom Table"
-        .Cells(1, 2) = "Nom Champ"
-        .Cells(1, 3) = "Type Données"
-        .Cells(1, 4) = "Taille"
-        .Cells(1, 5) = "Obligatoire"
-        .Cells(1, 6) = "Valeur par Défaut"
-        .Cells(1, 7) = "Description"
+        .Cells(1, 1).Value = "Nom Table"
+        .Cells(1, 2).Value = "Nom Champ"
+        .Cells(1, 3).Value = "Type Données"
+        .Cells(1, 4).Value = "Taille"
+        .Cells(1, 5).Value = "Obligatoire"
+        .Cells(1, 6).Value = "Valeur par Défaut"
+        .Cells(1, 7).Value = "Description"
         
         For col = 1 To 7
             .Cells(1, col).Font.Bold = True
@@ -102,13 +110,20 @@ Private Sub DocumenterTables(ws As Object)
     For Each tdf In db.TableDefs
         If Left(tdf.Name, 4) <> "MSys" Then ' Exclure les tables système
             For Each fld In tdf.Fields
-                ws.Cells(ligne, 1) = tdf.Name
-                ws.Cells(ligne, 2) = fld.Name
-                ws.Cells(ligne, 3) = TypeDonneesToString(fld.Type)
-                ws.Cells(ligne, 4) = IIf(fld.Type = dbText, fld.Size, "")
-                ws.Cells(ligne, 5) = IIf(fld.Required, "Oui", "Non")
-                ws.Cells(ligne, 6) = Nz(fld.DefaultValue, "")
-                ws.Cells(ligne, 7) = Nz(fld.Properties("Description"), "")
+                ws.Cells(ligne, 1).Value = tdf.Name
+                ws.Cells(ligne, 2).Value = fld.Name
+                ws.Cells(ligne, 3).Value = TypeDonneesToString(fld.Type)
+                ws.Cells(ligne, 4).Value = IIf(fld.Type = dbText, fld.Size, "")
+                ws.Cells(ligne, 5).Value = IIf(fld.Required, "Oui", "Non")
+                ws.Cells(ligne, 6).Value = Nz(fld.DefaultValue, "")
+                
+                ' Gestion de la propriété Description qui peut ne pas exister
+                Dim descValue As String
+                descValue = ""
+                On Error Resume Next
+                descValue = Nz(fld.Properties("Description"), "")
+                On Error GoTo 0
+                ws.Cells(ligne, 7).Value = descValue
                 
                 ligne = ligne + 1
             Next fld
@@ -119,18 +134,20 @@ Private Sub DocumenterTables(ws As Object)
 End Sub
 
 ' Documenter les Requêtes
-Private Sub DocumenterRequetes(ws As Object)
-    Dim qry As QueryDef
+Private Sub DocumenterRequetes(db As DAO.Database, ws As Object)
+    On Error Resume Next
+    
+    Dim qry As DAO.QueryDef
     Dim col As Integer
     Dim ligne As Integer
     
     ' En-têtes
     With ws
-        .Cells(1, 1) = "Nom Requête"
-        .Cells(1, 2) = "Type"
-        .Cells(1, 3) = "SQL"
-        .Cells(1, 4) = "Date Création"
-        .Cells(1, 5) = "Date Modification"
+        .Cells(1, 1).Value = "Nom Requête"
+        .Cells(1, 2).Value = "Type"
+        .Cells(1, 3).Value = "SQL"
+        .Cells(1, 4).Value = "Date Création"
+        .Cells(1, 5).Value = "Date Modification"
         
         For col = 1 To 5
             .Cells(1, col).Font.Bold = True
@@ -140,44 +157,61 @@ Private Sub DocumenterRequetes(ws As Object)
     
     ligne = 2
     
-    For Each qry In CurrentDb.QueryDefs
+    For Each qry In db.QueryDefs
         If Left(qry.Name, 1) <> "~" Then ' Exclure les requêtes temporaires
-            ws.Cells(ligne, 1) = qry.Name
-            ws.Cells(ligne, 2) = TypeRequeteToString(qry.Type)
-            ws.Cells(ligne, 3) = qry.SQL
-            ws.Cells(ligne, 4) = Nz(qry.Properties("DateCreated"), "")
-            ws.Cells(ligne, 5) = Nz(qry.Properties("LastUpdated"), "")
+            ws.Cells(ligne, 1).Value = qry.Name
+            ws.Cells(ligne, 2).Value = TypeRequeteToString(qry.Type)
+            ws.Cells(ligne, 3).Value = qry.SQL
+            
+            ' Gestion des propriétés qui peuvent ne pas exister
+            Dim dateCreated As Variant
+            Dim lastUpdated As Variant
+            
+            dateCreated = ""
+            lastUpdated = ""
+            
+            On Error Resume Next
+            dateCreated = Nz(qry.Properties("DateCreated"), "")
+            lastUpdated = Nz(qry.Properties("LastUpdated"), "")
+            On Error GoTo 0
+            
+            ws.Cells(ligne, 4).Value = dateCreated
+            ws.Cells(ligne, 5).Value = lastUpdated
             
             ligne = ligne + 1
         End If
     Next qry
     
-    ws.Columns.AutoFit
-    ws.Columns(3).ColumnWidth = 50
-    ws.Columns(3).WrapText = True
+    ws.Columns("A:B").AutoFit
+    ws.Columns("C").ColumnWidth = 50
+    ws.Columns("C").WrapText = True
+    ws.Columns("D:E").AutoFit
 End Sub
 
 ' Documenter les États
 Private Sub DocumenterEtats(ws As Object, dossierExport As String)
-    Dim rpt As Object
+    On Error Resume Next
+    
+    Dim rpt As Access.Report
     Dim ctl As Control
     Dim col As Integer
     Dim ligne As Integer
     Dim nomEtat As String
     Dim i As Integer
+    Dim objAccess As Object
     
     ' En-têtes
     With ws
-        .Cells(1, 1) = "Nom État"
-        .Cells(1, 2) = "Nom Contrôle"
-        .Cells(1, 3) = "Type Contrôle"
-        .Cells(1, 4) = "Source Contrôle"
-        .Cells(1, 5) = "Formule/Expression"
-        .Cells(1, 6) = "Visible"
-        .Cells(1, 7) = "Top"
-        .Cells(1, 8) = "Left"
-        .Cells(1, 9) = "Width"
-        .Cells(1, 10) = "Height"
+        .Cells(1, 1).Value = "Nom État"
+        .Cells(1, 2).Value = "Nom Contrôle"
+        .Cells(1, 3).Value = "Type Contrôle"
+        .Cells(1, 4).Value = "Source Contrôle"
+        .Cells(1, 5).Value = "Formule/Expression"
+        .Cells(1, 6).Value = "Visible"
+        .Cells(1, 7).Value = "Top"
+        .Cells(1, 8).Value = "Left"
+        .Cells(1, 9).Value = "Width"
+        .Cells(1, 10).Value = "Height"
         
         For col = 1 To 10
             .Cells(1, col).Font.Bold = True
@@ -191,21 +225,33 @@ Private Sub DocumenterEtats(ws As Object, dossierExport As String)
         nomEtat = CurrentProject.AllReports(i).Name
         
         On Error Resume Next
-        DoCmd.OpenReport nomEtat, acViewDesign
+        DoCmd.OpenReport nomEtat, acViewDesign, , , acHidden
         If Err.Number = 0 Then
             Set rpt = Reports(nomEtat)
             
             For Each ctl In rpt.Controls
-                ws.Cells(ligne, 1) = nomEtat
-                ws.Cells(ligne, 2) = ctl.Name
-                ws.Cells(ligne, 3) = TypeControleToString(ctl.ControlType)
-                ws.Cells(ligne, 4) = Nz(ctl.ControlSource, "")
-                ws.Cells(ligne, 5) = Nz(ctl.Properties("ControlSource"), "")
-                ws.Cells(ligne, 6) = IIf(ctl.Visible, "Oui", "Non")
-                ws.Cells(ligne, 7) = ctl.Top
-                ws.Cells(ligne, 8) = ctl.Left
-                ws.Cells(ligne, 9) = ctl.Width
-                ws.Cells(ligne, 10) = ctl.Height
+                ws.Cells(ligne, 1).Value = nomEtat
+                ws.Cells(ligne, 2).Value = ctl.Name
+                ws.Cells(ligne, 3).Value = TypeControleToString(ctl.ControlType)
+                ws.Cells(ligne, 4).Value = Nz(ctl.ControlSource, "")
+                
+                ' Essayer différentes propriétés pour les formules
+                Dim formule As String
+                formule = ""
+                On Error Resume Next
+                If Not ctl.ControlSource = "" Then
+                    formule = ctl.ControlSource
+                ElseIf TypeName(ctl) = "TextBox" Then
+                    formule = ctl.ControlSource
+                End If
+                On Error GoTo 0
+                
+                ws.Cells(ligne, 5).Value = formule
+                ws.Cells(ligne, 6).Value = IIf(ctl.Visible, "Oui", "Non")
+                ws.Cells(ligne, 7).Value = ctl.Top
+                ws.Cells(ligne, 8).Value = ctl.Left
+                ws.Cells(ligne, 9).Value = ctl.Width
+                ws.Cells(ligne, 10).Value = ctl.Height
                 
                 ligne = ligne + 1
             Next ctl
@@ -215,91 +261,98 @@ Private Sub DocumenterEtats(ws As Object, dossierExport As String)
         On Error GoTo 0
     Next i
     
-    ws.Columns.AutoFit
-    ws.Columns(4).ColumnWidth = 30
-    ws.Columns(5).ColumnWidth = 50
-    ws.Columns(4).WrapText = True
-    ws.Columns(5).WrapText = True
-End Sub
-
-' Documenter les Formulaires (optionnel)
-Private Sub DocumenterFormulaires(ws As Object)
-    ' Similaire à DocumenterEtats mais pour les formulaires
-    ' Vous pouvez l'adapter si nécessaire
-    ws.Cells(1, 1) = "Documentation des Formulaires"
-    ws.Cells(2, 1) = "Cette fonctionnalité peut être ajoutée si nécessaire"
+    ws.Columns("A:B").AutoFit
+    ws.Columns("C").AutoFit
+    ws.Columns("D").ColumnWidth = 30
+    ws.Columns("E").ColumnWidth = 50
+    ws.Columns("D:E").WrapText = True
+    ws.Columns("F:J").AutoFit
 End Sub
 
 ' Fonctions utilitaires
 Private Function TypeDonneesToString(typeDonnees As Integer) As String
     Select Case typeDonnees
-        Case 1: TypeDonneesToString = "Oui/Non"
-        Case 2: TypeDonneesToString = "Entier"
-        Case 3: TypeDonneesToString = "Entier Long"
-        Case 4: TypeDonneesToString = "Single"
-        Case 5: TypeDonneesToString = "Double"
-        Case 6: TypeDonneesToString = "Monétaire"
-        Case 7: TypeDonneesToString = "Date/Heure"
-        Case 8: TypeDonneesToString = "Texte"
-        Case 9: TypeDonneesToString = "Memo"
-        Case 10: TypeDonneesToString = "OLE"
-        Case 11: TypeDonneesToString = "Lien hypertexte"
+        Case dbBoolean: TypeDonneesToString = "Oui/Non"
+        Case dbByte: TypeDonneesToString = "Octet"
+        Case dbInteger: TypeDonneesToString = "Entier"
+        Case dbLong: TypeDonneesToString = "Entier Long"
+        Case dbCurrency: TypeDonneesToString = "Monétaire"
+        Case dbSingle: TypeDonneesToString = "Single"
+        Case dbDouble: TypeDonneesToString = "Double"
+        Case dbDate: TypeDonneesToString = "Date/Heure"
+        Case dbText: TypeDonneesToString = "Texte"
+        Case dbLongBinary: TypeDonneesToString = "Binaire Long"
+        Case dbMemo: TypeDonneesToString = "Memo"
+        Case dbGUID: TypeDonneesToString = "GUID"
         Case Else: TypeDonneesToString = "Inconnu (" & typeDonnees & ")"
     End Select
 End Function
 
 Private Function TypeRequeteToString(typeRequete As Integer) As String
     Select Case typeRequete
-        Case 0: TypeRequeteToString = "Sélection"
-        Case 1: TypeRequeteToString = "Table de création"
-        Case 2: TypeRequeteToString = "Sélection avec jointure"
-        Case 3: TypeRequeteToString = "Ajout"
-        Case 4: TypeRequeteToString = "Mise à jour"
-        Case 5: TypeRequeteToString = "Suppression"
-        Case 6: TypeRequeteToString = "Crosstab"
+        Case dbQSelect: TypeRequeteToString = "Sélection"
+        Case dbQAction: TypeRequeteToString = "Action"
+        Case dbQCrosstab: TypeRequeteToString = "Table croisée"
+        Case dbQDelete: TypeRequeteToString = "Suppression"
+        Case dbQUpdate: TypeRequeteToString = "Mise à jour"
+        Case dbQAppend: TypeRequeteToString = "Ajout"
+        Case dbQMakeTable: TypeRequeteToString = "Création table"
+        Case dbQDDL: TypeRequeteToString = "DDL"
+        Case dbQSQLPassThrough: TypeRequeteToString = "SQL Pass-Through"
+        Case dbQSetOperation: TypeRequeteToString = "Opération ensemble"
+        Case dbQSPTBulk: TypeRequeteToString = "SPT Bulk"
+        Case dbQCompound: TypeRequeteToString = "Composé"
         Case Else: TypeRequeteToString = "Inconnu (" & typeRequete & ")"
     End Select
 End Function
 
 Private Function TypeControleToString(typeControle As Integer) As String
     Select Case typeControle
-        Case 100: TypeControleToString = "Label"
-        Case 101: TypeControleToString = "Rectangle"
-        Case 102: TypeControleToString = "Line"
-        Case 103: TypeControleToString = "Image"
-        Case 104: TypeControleToString = "CommandButton"
-        Case 105: TypeControleToString = "OptionButton"
-        Case 106: TypeControleToString = "CheckBox"
-        Case 107: TypeControleToString = "OptionGroup"
-        Case 108: TypeControleToString = "BoundObjectFrame"
-        Case 109: TypeControleToString = "TextBox"
-        Case 110: TypeControleToString = "ListBox"
-        Case 111: TypeControleToString = "ComboBox"
-        Case 112: TypeControleToString = "Subform/Subreport"
-        Case 113: TypeControleToString = "ObjectFrame"
-        Case 114: TypeControleToString = "PageBreak"
-        Case 115: TypeControleToString = "CustomControl"
-        Case 116: TypeControleToString = "ToggleButton"
+        Case acLabel: TypeControleToString = "Label"
+        Case acRectangle: TypeControleToString = "Rectangle"
+        Case acLine: TypeControleToString = "Ligne"
+        Case acImage: TypeControleToString = "Image"
+        Case acCommandButton: TypeControleToString = "Bouton"
+        Case acOptionButton: TypeControleToString = "Bouton option"
+        Case acCheckBox: TypeControleToString = "Case à cocher"
+        Case acOptionGroup: TypeControleToString = "Groupe d'options"
+        Case acBoundObjectFrame: TypeControleToString = "Cadre objet lié"
+        Case acTextBox: TypeControleToString = "Zone texte"
+        Case acListBox: TypeControleToString = "Liste déroulante"
+        Case acComboBox: TypeControleToString = "Combo box"
+        Case acSubform: TypeControleToString = "Sous-formulaire"
+        Case acObjectFrame: TypeControleToString = "Cadre objet"
+        Case acPageBreak: TypeControleToString = "Saut de page"
+        Case acPage: TypeControleToString = "Page"
+        Case acCustomControl: TypeControleToString = "Contrôle personnalisé"
+        Case acToggleButton: TypeControleToString = "Bouton bascule"
+        Case acTabCtl: TypeControleToString = "Contrôle onglet"
         Case Else: TypeControleToString = "Inconnu (" & typeControle & ")"
     End Select
 End Function
 
 ' Fonction pour documenter un état spécifique
 Public Sub DocumenterEtatSpecifique(nomEtat As String)
+    On Error GoTo ErreurHandler
+    
     Dim xlApp As Object
     Dim xlWB As Object
     Dim xlWS As Object
-    Dim rpt As Object
+    Dim rpt As Report
     Dim ctl As Control
     Dim ligne As Integer
     Dim timestamp As String
     
     timestamp = Format(Now(), "yyyy-mm-dd_hh-nn-ss")
     
-    On Error GoTo ErreurHandler
+    ' Vérifier si l'état existe
+    If Not EtatExiste(nomEtat) Then
+        MsgBox "L'état '" & nomEtat & "' n'existe pas.", vbExclamation
+        Exit Sub
+    End If
     
     ' Ouvrir l'état en mode design
-    DoCmd.OpenReport nomEtat, acViewDesign
+    DoCmd.OpenReport nomEtat, acViewDesign, , , acHidden
     Set rpt = Reports(nomEtat)
     
     ' Créer Excel
@@ -307,18 +360,18 @@ Public Sub DocumenterEtatSpecifique(nomEtat As String)
     xlApp.Visible = True
     Set xlWB = xlApp.Workbooks.Add
     Set xlWS = xlWB.ActiveSheet
-    xlWS.Name = "État_" & nomEtat
+    xlWS.Name = "État_" & Replace(nomEtat, " ", "_")
     
     ' En-têtes
     With xlWS
-        .Cells(1, 1) = "Nom Contrôle"
-        .Cells(1, 2) = "Type"
-        .Cells(1, 3) = "Source/Formule"
-        .Cells(1, 4) = "Visible"
-        .Cells(1, 5) = "Position (Top)"
-        .Cells(1, 6) = "Position (Left)"
-        .Cells(1, 7) = "Largeur"
-        .Cells(1, 8) = "Hauteur"
+        .Cells(1, 1).Value = "Nom Contrôle"
+        .Cells(1, 2).Value = "Type"
+        .Cells(1, 3).Value = "Source/Formule"
+        .Cells(1, 4).Value = "Visible"
+        .Cells(1, 5).Value = "Position (Top)"
+        .Cells(1, 6).Value = "Position (Left)"
+        .Cells(1, 7).Value = "Largeur"
+        .Cells(1, 8).Value = "Hauteur"
         
         For ligne = 1 To 8
             .Cells(1, ligne).Font.Bold = True
@@ -330,14 +383,14 @@ Public Sub DocumenterEtatSpecifique(nomEtat As String)
     
     ' Parcourir tous les contrôles
     For Each ctl In rpt.Controls
-        xlWS.Cells(ligne, 1) = ctl.Name
-        xlWS.Cells(ligne, 2) = TypeControleToString(ctl.ControlType)
-        xlWS.Cells(ligne, 3) = Nz(ctl.ControlSource, Nz(ctl.Properties("ControlSource"), ""))
-        xlWS.Cells(ligne, 4) = IIf(ctl.Visible, "Oui", "Non")
-        xlWS.Cells(ligne, 5) = ctl.Top
-        xlWS.Cells(ligne, 6) = ctl.Left
-        xlWS.Cells(ligne, 7) = ctl.Width
-        xlWS.Cells(ligne, 8) = ctl.Height
+        xlWS.Cells(ligne, 1).Value = ctl.Name
+        xlWS.Cells(ligne, 2).Value = TypeControleToString(ctl.ControlType)
+        xlWS.Cells(ligne, 3).Value = Nz(ctl.ControlSource, "")
+        xlWS.Cells(ligne, 4).Value = IIf(ctl.Visible, "Oui", "Non")
+        xlWS.Cells(ligne, 5).Value = ctl.Top
+        xlWS.Cells(ligne, 6).Value = ctl.Left
+        xlWS.Cells(ligne, 7).Value = ctl.Width
+        xlWS.Cells(ligne, 8).Value = ctl.Height
         
         ligne = ligne + 1
     Next ctl
@@ -347,7 +400,7 @@ Public Sub DocumenterEtatSpecifique(nomEtat As String)
     xlWS.Columns(3).WrapText = True
     
     ' Sauvegarder
-    xlWB.SaveAs CurrentProject.Path & "\Documentation_" & nomEtat & "_" & timestamp & ".xlsx"
+    xlWB.SaveAs CurrentProject.Path & "\Documentation_" & Replace(nomEtat, " ", "_") & "_" & timestamp & ".xlsx"
     
     DoCmd.Close acReport, nomEtat, acSaveNo
     
@@ -356,12 +409,28 @@ Public Sub DocumenterEtatSpecifique(nomEtat As String)
 Nettoyage:
     On Error Resume Next
     Set xlWS = Nothing
+    If Not xlWB Is Nothing Then xlWB.Close False
+    If Not xlApp Is Nothing Then xlApp.Quit
     Set xlWB = Nothing
     Set xlApp = Nothing
     Set rpt = Nothing
     Exit Sub
     
 ErreurHandler:
-    MsgBox "Erreur: " & Err.Description, vbCritical
+    MsgBox "Erreur " & Err.Number & ": " & Err.Description, vbCritical
     Resume Nettoyage
 End Sub
+
+' Vérifier si un état existe
+Private Function EtatExiste(nomEtat As String) As Boolean
+    On Error Resume Next
+    Dim i As Integer
+    
+    EtatExiste = False
+    For i = 0 To CurrentProject.AllReports.Count - 1
+        If CurrentProject.AllReports(i).Name = nomEtat Then
+            EtatExiste = True
+            Exit For
+        End If
+    Next i
+End Function
