@@ -117,7 +117,7 @@ Public Sub ExportReportDocumentation()
         ' SourceObject (pour les sous-rapports)
         srcObj = ""
         On Error Resume Next
-        If ctl.ControlType = acSubform Then
+        If ctl.ControlType = 112 Then ' acSubform = 112
             srcObj = Nz(ctl.SourceObject, "")
         End If
         If Err.Number <> 0 Then
@@ -283,27 +283,27 @@ Private Function ControlTypeName(ctrlType As Long) As String
         Case acCheckBox: ControlTypeName = "CheckBox"
         Case acOptionButton: ControlTypeName = "OptionButton"
         Case acToggleButton: ControlTypeName = "ToggleButton"
-        Case acRectangle: ControlTypeName = "Rectangle"
-        Case acLine: ControlTypeName = "Line"
-        Case acImage: ControlTypeName = "Image"
-        Case acBoundObjectFrame: ControlTypeName = "BoundObjectFrame"
-        Case acUnboundObjectFrame: ControlTypeName = "UnboundObjectFrame"
-        Case acPageBreak: ControlTypeName = "PageBreak"
+        Case 101: ControlTypeName = "Rectangle" ' acRectangle
+        Case 102: ControlTypeName = "Line" ' acLine
+        Case 103: ControlTypeName = "Image" ' acImage
+        Case 108: ControlTypeName = "BoundObjectFrame" ' acBoundObjectFrame
+        Case 109: ControlTypeName = "UnboundObjectFrame" ' acUnboundObjectFrame
+        Case 118: ControlTypeName = "PageBreak" ' acPageBreak
         Case Else: ControlTypeName = "Autre (" & ctrlType & ")"
     End Select
 End Function
 
 Private Function SectionName(sec As Long) As String
     Select Case sec
-        Case acDetail: SectionName = "Detail"
-        Case acHeader: SectionName = "PageHeader"
-        Case acFooter: SectionName = "PageFooter"
-        Case acPageHeader: SectionName = "PageHeader"
-        Case acPageFooter: SectionName = "PageFooter"
-        Case acGroupLevel1Header: SectionName = "GroupHeader1"
-        Case acGroupLevel1Footer: SectionName = "GroupFooter1"
-        Case acGroupLevel2Header: SectionName = "GroupHeader2"
-        Case acGroupLevel2Footer: SectionName = "GroupFooter2"
+        Case 0: SectionName = "Detail" ' acDetail
+        Case 1: SectionName = "PageHeader" ' acHeader
+        Case 2: SectionName = "PageFooter" ' acFooter
+        Case 1: SectionName = "PageHeader" ' acPageHeader (même valeur que acHeader)
+        Case 2: SectionName = "PageFooter" ' acPageFooter (même valeur que acFooter)
+        Case 3: SectionName = "GroupHeader1" ' acGroupLevel1Header
+        Case 4: SectionName = "GroupFooter1" ' acGroupLevel1Footer
+        Case 5: SectionName = "GroupHeader2" ' acGroupLevel2Header
+        Case 6: SectionName = "GroupFooter2" ' acGroupLevel2Footer
         Case Else: SectionName = "Section_" & sec
     End Select
 End Function
