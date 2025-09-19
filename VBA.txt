@@ -32,13 +32,13 @@ Public Sub DocumenterTousLesEtats()
         .Range("C1").Value = "Nom contrôle"
         .Range("D1").Value = "Type contrôle"
         .Range("E1").Value = "Source données"
-        .Range("F1").Value = "Expression"
+        .Range("F1").Value = "Expression/Calcul"
         .Range("G1").Value = "Requête source"
         .Range("H1").Value = "Table source"
         .Range("I1").Value = "Format"
         .Range("J1").Value = "Visible"
         .Range("K1").Value = "Libellé"
-        .Range("L1").Value = "Description"
+        .Range("L1").Value = "Type de source"
         
         ' Mise en forme des en-têtes
         .Rows(1).Font.Bold = True
@@ -65,27 +65,39 @@ Public Sub DocumenterTousLesEtats()
                     .Range("A" & ligne).Value = objRpt.Name
                     .Range("B" & ligne).Value = ObtenirNomSection(ctrl.Section)
                     .Range("C" & ligne).Value = ctrl.Name
-                    .Range("D" & ligne).Value = TypeName(ctrl)
+                    .Range("D" & ligne).Value = ObtenirTypeControle(ctrl.ControlType)
                     
                     ' Analyser les sources de données selon le type de contrôle
                     Select Case ctrl.ControlType
                     Case acTextBox
-                        .Range("E" & ligne).Value = Nz(ctrl.ControlSource, "")
                         If Nz(ctrl.ControlSource, "") <> "" Then
                             If Left(ctrl.ControlSource, 1) = "=" Then
+                                ' C'est un calcul
                                 .Range("F" & ligne).Value = ctrl.ControlSource
+                                .Range("L" & ligne).Value = "Calcul"
+                                AnalyserCalcul db, ctrl.ControlSource, xlWS, ligne
                             Else
+                                ' C'est un champ lié
                                 .Range("E" & ligne).Value = ctrl.ControlSource
+                                .Range("L" & ligne).Value = "Champ lié"
                                 AnalyserSourceDonnees db, ctrl.ControlSource, xlWS, ligne
                             End If
                         End If
                     Case acComboBox, acListBox
                         .Range("E" & ligne).Value = Nz(ctrl.RowSource, "")
+                        .Range("L" & ligne).Value = "Liste"
                         AnalyserSourceDonnees db, ctrl.RowSource, xlWS, ligne
                     Case acLabel
                         .Range("K" & ligne).Value = Nz(ctrl.Caption, "")
+                        .Range("L" & ligne).Value = "Libellé"
+                    Case acCheckBox
+                        .Range("E" & ligne).Value = Nz(ctrl.ControlSource, "")
+                        .Range("L" & ligne).Value = "Case à cocher"
+                        AnalyserSourceDonnees db, ctrl.ControlSource, xlWS, ligne
                     Case Else
                         .Range("E" & ligne).Value = Nz(ctrl.ControlSource, "")
+                        .Range("L" & ligne).Value = "Autre"
+                        AnalyserSourceDonnees db, ctrl.ControlSource, xlWS, ligne
                     End Select
                     
                     ' Propriétés supplémentaires
@@ -107,12 +119,9 @@ NextRpt:
         .Columns("A:L").AutoFit
         .Rows.AutoFit
         
-        ' Ajouter un tableau Excel pour faciliter le filtrage (utilisation de valeurs numériques au lieu de constantes)
+        ' Ajouter un tableau Excel pour faciliter le filtrage
         Dim tblRange As Object
         Set tblRange = .Range("A1:L" & (ligne - 1))
-        
-        ' Créer le tableau avec les valeurs numériques des constantes Excel
-        ' xlSrcRange = -4154, xlYes = 1
         .ListObjects.Add(-4154, tblRange, , 1).Name = "TableauDocumentation"
         .ListObjects("TableauDocumentation").TableStyle = "TableStyleMedium9"
     End With
@@ -156,15 +165,36 @@ Private Function ObtenirNomSection(sectionCode As Integer) As String
     End Select
 End Function
 
+Private Function ObtenirTypeControle(typeControle As Integer) As String
+    Select Case typeControle
+        Case acTextBox: ObtenirTypeControle = "Zone de texte"
+        Case acLabel: ObtenirTypeControle = "Étiquette"
+        Case acComboBox: ObtenirTypeControle = "Liste déroulante"
+        Case acListBox: ObtenirTypeControle = "Liste"
+        Case acCheckBox: ObtenirTypeControle = "Case à cocher"
+        Case acOptionGroup: ObtenirTypeControle = "Groupe d'options"
+        Case acToggleButton: ObtenirTypeControle = "Bouton bascule"
+        Case acOptionButton: ObtenirTypeControle = "Bouton d'option"
+        Case acCommandButton: ObtenirTypeControle = "Bouton de commande"
+        Case acSubform: ObtenirTypeControle = "Sous-formulaire"
+        Case acObjectFrame: ObtenirTypeControle = "Cadre d'objet"
+        Case acPageBreak: ObtenirTypeControle = "Saut de page"
+        Case acLine: ObtenirTypeControle = "Ligne"
+        Case acRectangle: ObtenirTypeControle = "Rectangle"
+        Case Else: ObtenirTypeControle = "Autre (" & typeControle & ")"
+    End Select
+End Function
+
 Private Sub AnalyserSourceDonnees(db As Database, source As String, xlWS As Object, ligne As Integer)
     On Error Resume Next
     
     Dim qdf As QueryDef
     Dim tdf As TableDef
     Dim nomSource As String
+    Dim i As Integer
     
-    ' Nettoyer la source (enlever les éventuels points-virgules)
-    nomSource = Replace(source, ";", "")
+    ' Nettoyer la source (enlever les éventuels crochets)
+    nomSource = Replace(Replace(source, "[", ""), "]", "")
     
     ' Vérifier si c'est une requête
     For Each qdf In db.QueryDefs
@@ -186,7 +216,45 @@ Private Sub AnalyserSourceDonnees(db As Database, source As String, xlWS As Obje
     ' Vérifier si c'est une expression SQL directe
     If InStr(1, nomSource, "SELECT", vbTextCompare) > 0 Or _
        InStr(1, nomSource, "FROM", vbTextCompare) > 0 Then
+        xlWS.Range("G" & ligne).Value = "SQL Direct"
         xlWS.Range("H" & ligne).Value = ExtraireTablesRequete(nomSource)
+    End If
+    
+    ' Si aucune source n'a été trouvée, c'est peut-être un champ direct
+    If xlWS.Range("G" & ligne).Value = "" And xlWS.Range("H" & ligne).Value = "" Then
+        xlWS.Range("H" & ligne).Value = "Champ: " & nomSource
+    End If
+End Sub
+
+Private Sub AnalyserCalcul(db As Database, calcul As String, xlWS As Object, ligne As Integer)
+    On Error Resume Next
+    
+    Dim i As Integer
+    Dim j As Integer
+    Dim mots() As String
+    Dim champ As String
+    Dim champsTrouves As String
+    
+    ' Extraire les champs référencés dans le calcul (entre crochets)
+    mots = Split(calcul, "[")
+    
+    For i = 1 To UBound(mots) ' Commencer à 1 pour ignorer la partie avant le premier [
+        If InStr(mots(i), "]") > 0 Then
+            champ = Trim(Left(mots(i), InStr(mots(i), "]") - 1))
+            
+            ' Éviter les doublons
+            If InStr(champsTrouves, "[" & champ & "]") = 0 Then
+                champsTrouves = champsTrouves & "[" & champ & "]; "
+                
+                ' Essayer de trouver la source de ce champ
+                AnalyserSourceDonnees db, champ, xlWS, ligne
+            End If
+        End If
+    Next i
+    
+    ' Ajouter les champs trouvés à la documentation
+    If champsTrouves <> "" Then
+        xlWS.Range("H" & ligne).Value = xlWS.Range("H" & ligne).Value & " Champs utilisés: " & Left(champsTrouves, Len(champsTrouves) - 2)
     End If
 End Sub
 
@@ -199,26 +267,33 @@ Private Function ExtraireTablesRequete(sqlText As String) As String
     If sqlText = "" Then Exit Function
     
     ' Normaliser le SQL
-    sqlText = Replace(Replace(sqlText, vbCrLf, " "), vbTab, " ")
+    sqlText = Replace(Replace(Replace(sqlText, vbCrLf, " "), vbTab, " "), "  ", " ")
     mots = Split(sqlText, " ")
     
     dansFrom = False
     For i = LBound(mots) To UBound(mots)
         If UCase(mots(i)) = "FROM" Then
             dansFrom = True
-        ElseIf dansFrom And UCase(mots(i)) = "WHERE" Then
-            Exit For
-        ElseIf dansFrom And UCase(mots(i)) = "ORDER" Then
-            Exit For
-        ElseIf dansFrom And UCase(mots(i)) = "GROUP" Then
+        ElseIf dansFrom And (UCase(mots(i)) = "WHERE" Or UCase(mots(i)) = "ORDER" Or UCase(mots(i)) = "GROUP") Then
             Exit For
         ElseIf dansFrom And mots(i) <> "" And UCase(mots(i)) <> "INNER" And _
                UCase(mots(i)) <> "LEFT" And UCase(mots(i)) <> "RIGHT" And _
                UCase(mots(i)) <> "JOIN" And UCase(mots(i)) <> "ON" Then
-            If InStr(mots(i), ".") > 0 Then
-                tables = tables & Split(mots(i), ".")(1) & "; "
-            Else
-                tables = tables & mots(i) & "; "
+            ' Nettoyer le nom de table (enlever les crochets, alias, etc.)
+            Dim nomTable As String
+            nomTable = mots(i)
+            
+            ' Enlever les crochets
+            nomTable = Replace(Replace(nomTable, "[", ""), "]", "")
+            
+            ' Enlever les alias (après un espace)
+            If InStr(nomTable, " ") > 0 Then
+                nomTable = Left(nomTable, InStr(nomTable, " ") - 1)
+            End If
+            
+            ' Ajouter la table si elle n'est pas déjà dans la liste
+            If InStr(tables, nomTable) = 0 And nomTable <> "" Then
+                tables = tables & nomTable & "; "
             End If
         End If
     Next i
