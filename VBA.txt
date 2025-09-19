@@ -1,215 +1,367 @@
 Option Compare Database
 Option Explicit
 
-Sub GenererDocumentationAccess()
-
-    Dim appExcel As Object
-    Dim wbk As Object
-    Dim wksTables As Object
-    Dim wksQueries As Object
-    Dim wksReports As Object
-    Dim db As DAO.Database
-    Dim tblDef As DAO.TableDef
-    Dim fld As DAO.Field
-    Dim qDef As DAO.QueryDef
-    Dim rpt As Access.Report
-    Dim ctl As Access.Control
-    Dim strFilePath As String
-    Dim strFileName As String
-    Dim i As Long
-    Dim idx As DAO.Index ' Ajouté pour la gestion des index
-    Dim fldIdx As DAO.Field ' Ajouté pour les champs d'index
-
-    On Error GoTo ErrorHandler
-
-    ' --- 1. Chemin du Fichier Excel ---
-    strFileName = "Documentation_Access_" & Format(Now, "YYYYMMDD_HHMMSS") & ".xlsx"
-    strFilePath = CurrentProject.Path & "\" & strFileName
-
-    ' --- 2. Démarrer Excel et créer le classeur ---
-    Set appExcel = CreateObject("Excel.Application")
-    appExcel.Visible = True ' Rendre Excel visible
-    Set wbk = appExcel.Workbooks.Add
+' Module de documentation Access
+Public Sub DocumenterBaseAccess()
+    Dim db As Database
+    Dim xlApp As Object
+    Dim xlWB As Object
+    Dim xlWS As Object
+    Dim fso As Object
+    Dim dossierExport As String
+    Dim nomFichier As String
+    Dim timestamp As String
     
-    ' Supprimer les feuilles par défaut (sauf une)
-    Do While wbk.Sheets.Count > 1
-        appExcel.DisplayAlerts = False
-        wbk.Sheets(2).Delete
-        appExcel.DisplayAlerts = True
-    Loop
-
-    ' Renommer la première feuille existante pour les Tables
-    Set wksTables = wbk.Sheets(1)
-    wksTables.Name = "Tables"
-
-    ' Ajouter des feuilles pour les Requêtes et les États
-    Set wksQueries = wbk.Sheets.Add(After:=wksTables)
-    wksQueries.Name = "Requêtes"
-    Set wksReports = wbk.Sheets.Add(After:=wksQueries)
-    wksReports.Name = "États"
-
-    ' --- 3. En-têtes pour les Feuilles ---
-
-    ' En-têtes Tables
-    wksTables.Cells(1, 1).Value = "Nom de la Table"
-    wksTables.Cells(1, 2).Value = "Nom du Champ"
-    wksTables.Cells(1, 3).Value = "Type de Données"
-    wksTables.Cells(1, 4).Value = "Taille du Champ"
-    wksTables.Cells(1, 5).Value = "Est Clé Primaire"
-    wksTables.Range("A1:E1").Font.Bold = True
-
-    ' En-têtes Requêtes
-    wksQueries.Cells(1, 1).Value = "Nom de la Requête"
-    wksQueries.Cells(1, 2).Value = "SQL de la Requête"
-    wksQueries.Range("A1:B1").Font.Bold = True
-
-    ' En-têtes États
-    wksReports.Cells(1, 1).Value = "Nom de l'État"
-    wksReports.Cells(1, 2).Value = "Type de Contrôle"
-    wksReports.Cells(1, 3).Value = "Nom du Contrôle"
-    wksReports.Cells(1, 4).Value = "Source du Contrôle (Champ / Formule)"
-    wksReports.Range("A1:D1").Font.Bold = True
-
-    ' --- 4. Récupérer la base de données courante ---
-    Set db = CurrentDb
-
-    ' --- 5. Remplir les données ---
-    Dim currentRow As Long
-
-    ' Traiter les Tables
-    currentRow = 2
-    For Each tblDef In db.TableDefs
-        ' Ignorer les tables système et temporaires
-        If Left(tblDef.Name, 4) <> "MSys" And Left(tblDef.Name, 1) <> "~" And Not (tblDef.Attributes And dbHiddenObject) Then
-            For Each fld In tblDef.Fields
-                wksTables.Cells(currentRow, 1).Value = tblDef.Name
-                wksTables.Cells(currentRow, 2).Value = fld.Name
-                wksTables.Cells(currentRow, 3).Value = GetDataTypeName(fld.Type) ' Utilisation d'une fonction pour le nom du type
-                wksTables.Cells(currentRow, 4).Value = IIf(fld.Type = dbText Or fld.Type = dbMemo, fld.Size, "") ' La taille n'a de sens que pour le texte/mémo
-                
-                ' Vérifier si le champ fait partie de la clé primaire (Nouvelle méthode)
-                Dim isPrimaryKey As Boolean
-                isPrimaryKey = False
-                
-                On Error Resume Next ' Gérer les erreurs si une table n'a pas d'index
-                For Each idx In tblDef.Indexes
-                    If idx.Primary Then ' Si c'est un index primaire
-                        For Each fldIdx In idx.Fields
-                            If fldIdx.Name = fld.Name Then
-                                isPrimaryKey = True
-                                Exit For ' Trouvé dans la clé primaire
-                            End If
-                        Next fldIdx
-                    End If
-                    If isPrimaryKey Then Exit For ' Inutile de chercher d'autres index
-                Next idx
-                On Error GoTo ErrorHandler ' Réactiver la gestion d'erreur générale
-                
-                wksTables.Cells(currentRow, 5).Value = IIf(isPrimaryKey, "Oui", "Non")
-                
-                currentRow = currentRow + 1
-            Next fld
-        End If
-    Next tblDef
-    wksTables.Columns.AutoFit
-
-    ' Traiter les Requêtes
-    currentRow = 2
-    For Each qDef In db.QueryDefs
-        ' Ignorer les requêtes système et temporaires
-        If Left(qDef.Name, 4) <> "~sq_" And Not (qDef.Attributes And dbSystemObject) And Not (qDef.Attributes And dbHiddenObject) Then
-            wksQueries.Cells(currentRow, 1).Value = qDef.Name
-            wksQueries.Cells(currentRow, 2).Value = qDef.SQL
-            currentRow = currentRow + 1
-        End If
-    Next qDef
-    wksQueries.Columns.AutoFit
-
-    ' Traiter les États
-    currentRow = 2
-    Dim obj As Access.Object
-    For Each obj In CurrentProject.AllReports
-        ' Ouvrir l'état en mode design pour accéder aux contrôles
-        DoCmd.OpenReport obj.Name, acViewDesign
-        Set rpt = Reports(obj.Name)
-
-        For Each ctl In rpt.Controls
-            wksReports.Cells(currentRow, 1).Value = rpt.Name
-            wksReports.Cells(currentRow, 2).Value = TypeName(ctl) ' Ex: TextBox, Label, CommandButton
-            wksReports.Cells(currentRow, 3).Value = ctl.Name
-            
-            ' Pour les contrôles ayant une source (champs liés ou calculs)
-            On Error Resume Next ' Gérer les erreurs si ControlSource n'existe pas pour certains contrôles
-            wksReports.Cells(currentRow, 4).Value = ctl.ControlSource
-            On Error GoTo ErrorHandler ' Réactiver la gestion d'erreur générale
-            
-            currentRow = currentRow + 1
-        Next ctl
-        
-        DoCmd.Close acReport, obj.Name, acSaveNo ' Fermer l'état sans sauvegarder les modifications
-    Next obj
-    wksReports.Columns.AutoFit
-
-    ' --- 6. Enregistrer le fichier Excel ---
-    wbk.SaveAs strFilePath, FileFormat:=xlOpenXMLWorkbook ' Spécifier le format pour .xlsx
+    On Error GoTo ErreurHandler
     
-    ' --- 7. Nettoyage ---
-    Set fldIdx = Nothing
-    Set idx = Nothing
-    Set ctl = Nothing
-    Set rpt = Nothing
-    Set qDef = Nothing
-    Set fld = Nothing
-    Set tblDef = Nothing
+    ' Créer le dossier d'export
+    timestamp = Format(Now(), "yyyy-mm-dd_hh-nn-ss")
+    dossierExport = CurrentProject.Path & "\Documentation_Access_" & timestamp
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    
+    If Not fso.FolderExists(dossierExport) Then
+        fso.CreateFolder dossierExport
+    End If
+    
+    ' Créer Excel
+    Set xlApp = CreateObject("Excel.Application")
+    xlApp.Visible = True
+    Set xlWB = xlApp.Workbooks.Add
+    xlApp.DisplayAlerts = False
+    
+    ' Documenter les Tables
+    Set xlWS = xlWB.Worksheets.Add
+    xlWS.Name = "Tables"
+    DocumenterTables xlWS
+    
+    ' Documenter les Requêtes
+    Set xlWS = xlWB.Worksheets.Add
+    xlWS.Name = "Requêtes"
+    DocumenterRequetes xlWS
+    
+    ' Documenter les États
+    Set xlWS = xlWB.Worksheets.Add
+    xlWS.Name = "États"
+    DocumenterEtats xlWS, dossierExport
+    
+    ' Documenter les Formulaires
+    Set xlWS = xlWB.Worksheets.Add
+    xlWS.Name = "Formulaires"
+    DocumenterFormulaires xlWS
+    
+    ' Sauvegarder le fichier Excel
+    nomFichier = dossierExport & "\Documentation_Complete_" & timestamp & ".xlsx"
+    xlWB.SaveAs nomFichier
+    xlApp.DisplayAlerts = True
+    
+    MsgBox "Documentation terminée ! Fichier sauvegardé dans : " & nomFichier, vbInformation
+    
+Nettoyage:
+    On Error Resume Next
+    Set xlWS = Nothing
+    Set xlWB = Nothing
+    Set xlApp = Nothing
     Set db = Nothing
-    Set wksReports = Nothing
-    Set wksQueries = Nothing
-    Set wksTables = Nothing
-    If Not wbk Is Nothing Then
-        wbk.Close SaveChanges:=False
-    End If
-    If Not appExcel Is Nothing Then
-        appExcel.Quit
-    End If
-    Set wbk = Nothing
-    Set appExcel = Nothing
-
-    MsgBox "Documentation générée avec succès dans : " & strFilePath, vbInformation
+    Set fso = Nothing
     Exit Sub
-
-ErrorHandler:
-    MsgBox "Une erreur est survenue : " & Err.Description & " (Numéro: " & Err.Number & ") à l'étape " & currentRow, vbCritical
-    If Not wbk Is Nothing Then
-        On Error Resume Next
-        wbk.Close SaveChanges:=False
-        On Error GoTo 0
-    End If
-    If Not appExcel Is Nothing Then
-        On Error Resume Next
-        appExcel.Quit
-        On Error GoTo 0
-    End If
-    Set appExcel = Nothing
+    
+ErreurHandler:
+    MsgBox "Erreur: " & Err.Description & " (Line: " & Erl & ")", vbCritical
+    Resume Nettoyage
 End Sub
 
-' --- Nouvelle fonction pour obtenir le nom lisible du type de données ---
-Function GetDataTypeName(DataType As DAO.DataTypeEnum) As String
-    Select Case DataType
-        Case dbBoolean: GetDataTypeName = "Oui/Non"
-        Case dbByte: GetDataTypeName = "Octet"
-        Case dbInteger: GetDataTypeName = "Entier"
-        Case dbLong: GetDataTypeName = "Entier Long"
-        Case dbCurrency: GetDataTypeName = "Monétaire"
-        Case dbSingle: GetDataTypeName = "Réel Simple"
-        Case dbDouble: GetDataTypeName = "Réel Double"
-        Case dbDate: GetDataTypeName = "Date/Heure"
-        Case dbText: GetDataTypeName = "Texte"
-        Case dbLongBinary: GetDataTypeName = "Objet OLE"
-        Case dbMemo: GetDataTypeName = "Mémo"
-        Case dbGUID: GetDataTypeName = "ID de Réplication"
-        Case dbBigInt: GetDataTypeName = "Grand Entier"
-        Case dbVarChar: GetDataTypeName = "Texte long" ' Pour les versions plus récentes
-        Case dbNumeric: GetDataTypeName = "Numérique"
-        Case Else: GetDataTypeName = "Inconnu (" & DataType & ")"
+' Documenter les Tables
+Private Sub DocumenterTables(ws As Object)
+    Dim db As Database
+    Dim tdf As TableDef
+    Dim fld As Field
+    Dim idx As Index
+    Dim col As Integer
+    Dim ligne As Integer
+    
+    Set db = CurrentDb
+    
+    ' En-têtes
+    With ws
+        .Cells(1, 1) = "Nom Table"
+        .Cells(1, 2) = "Nom Champ"
+        .Cells(1, 3) = "Type Données"
+        .Cells(1, 4) = "Taille"
+        .Cells(1, 5) = "Obligatoire"
+        .Cells(1, 6) = "Valeur par Défaut"
+        .Cells(1, 7) = "Description"
+        
+        For col = 1 To 7
+            .Cells(1, col).Font.Bold = True
+            .Cells(1, col).Interior.Color = RGB(200, 200, 200)
+        Next col
+    End With
+    
+    ligne = 2
+    
+    For Each tdf In db.TableDefs
+        If Left(tdf.Name, 4) <> "MSys" Then ' Exclure les tables système
+            For Each fld In tdf.Fields
+                ws.Cells(ligne, 1) = tdf.Name
+                ws.Cells(ligne, 2) = fld.Name
+                ws.Cells(ligne, 3) = TypeDonneesToString(fld.Type)
+                ws.Cells(ligne, 4) = IIf(fld.Type = dbText, fld.Size, "")
+                ws.Cells(ligne, 5) = IIf(fld.Required, "Oui", "Non")
+                ws.Cells(ligne, 6) = Nz(fld.DefaultValue, "")
+                ws.Cells(ligne, 7) = Nz(fld.Properties("Description"), "")
+                
+                ligne = ligne + 1
+            Next fld
+        End If
+    Next tdf
+    
+    ws.Columns.AutoFit
+End Sub
+
+' Documenter les Requêtes
+Private Sub DocumenterRequetes(ws As Object)
+    Dim qry As QueryDef
+    Dim col As Integer
+    Dim ligne As Integer
+    
+    ' En-têtes
+    With ws
+        .Cells(1, 1) = "Nom Requête"
+        .Cells(1, 2) = "Type"
+        .Cells(1, 3) = "SQL"
+        .Cells(1, 4) = "Date Création"
+        .Cells(1, 5) = "Date Modification"
+        
+        For col = 1 To 5
+            .Cells(1, col).Font.Bold = True
+            .Cells(1, col).Interior.Color = RGB(200, 200, 200)
+        Next col
+    End With
+    
+    ligne = 2
+    
+    For Each qry In CurrentDb.QueryDefs
+        If Left(qry.Name, 1) <> "~" Then ' Exclure les requêtes temporaires
+            ws.Cells(ligne, 1) = qry.Name
+            ws.Cells(ligne, 2) = TypeRequeteToString(qry.Type)
+            ws.Cells(ligne, 3) = qry.SQL
+            ws.Cells(ligne, 4) = Nz(qry.Properties("DateCreated"), "")
+            ws.Cells(ligne, 5) = Nz(qry.Properties("LastUpdated"), "")
+            
+            ligne = ligne + 1
+        End If
+    Next qry
+    
+    ws.Columns.AutoFit
+    ws.Columns(3).ColumnWidth = 50
+    ws.Columns(3).WrapText = True
+End Sub
+
+' Documenter les États
+Private Sub DocumenterEtats(ws As Object, dossierExport As String)
+    Dim rpt As Object
+    Dim ctl As Control
+    Dim col As Integer
+    Dim ligne As Integer
+    Dim nomEtat As String
+    Dim i As Integer
+    
+    ' En-têtes
+    With ws
+        .Cells(1, 1) = "Nom État"
+        .Cells(1, 2) = "Nom Contrôle"
+        .Cells(1, 3) = "Type Contrôle"
+        .Cells(1, 4) = "Source Contrôle"
+        .Cells(1, 5) = "Formule/Expression"
+        .Cells(1, 6) = "Visible"
+        .Cells(1, 7) = "Top"
+        .Cells(1, 8) = "Left"
+        .Cells(1, 9) = "Width"
+        .Cells(1, 10) = "Height"
+        
+        For col = 1 To 10
+            .Cells(1, col).Font.Bold = True
+            .Cells(1, col).Interior.Color = RGB(200, 200, 200)
+        Next col
+    End With
+    
+    ligne = 2
+    
+    For i = 0 To CurrentProject.AllReports.Count - 1
+        nomEtat = CurrentProject.AllReports(i).Name
+        
+        On Error Resume Next
+        DoCmd.OpenReport nomEtat, acViewDesign
+        If Err.Number = 0 Then
+            Set rpt = Reports(nomEtat)
+            
+            For Each ctl In rpt.Controls
+                ws.Cells(ligne, 1) = nomEtat
+                ws.Cells(ligne, 2) = ctl.Name
+                ws.Cells(ligne, 3) = TypeControleToString(ctl.ControlType)
+                ws.Cells(ligne, 4) = Nz(ctl.ControlSource, "")
+                ws.Cells(ligne, 5) = Nz(ctl.Properties("ControlSource"), "")
+                ws.Cells(ligne, 6) = IIf(ctl.Visible, "Oui", "Non")
+                ws.Cells(ligne, 7) = ctl.Top
+                ws.Cells(ligne, 8) = ctl.Left
+                ws.Cells(ligne, 9) = ctl.Width
+                ws.Cells(ligne, 10) = ctl.Height
+                
+                ligne = ligne + 1
+            Next ctl
+            
+            DoCmd.Close acReport, nomEtat, acSaveNo
+        End If
+        On Error GoTo 0
+    Next i
+    
+    ws.Columns.AutoFit
+    ws.Columns(4).ColumnWidth = 30
+    ws.Columns(5).ColumnWidth = 50
+    ws.Columns(4).WrapText = True
+    ws.Columns(5).WrapText = True
+End Sub
+
+' Documenter les Formulaires (optionnel)
+Private Sub DocumenterFormulaires(ws As Object)
+    ' Similaire à DocumenterEtats mais pour les formulaires
+    ' Vous pouvez l'adapter si nécessaire
+    ws.Cells(1, 1) = "Documentation des Formulaires"
+    ws.Cells(2, 1) = "Cette fonctionnalité peut être ajoutée si nécessaire"
+End Sub
+
+' Fonctions utilitaires
+Private Function TypeDonneesToString(typeDonnees As Integer) As String
+    Select Case typeDonnees
+        Case 1: TypeDonneesToString = "Oui/Non"
+        Case 2: TypeDonneesToString = "Entier"
+        Case 3: TypeDonneesToString = "Entier Long"
+        Case 4: TypeDonneesToString = "Single"
+        Case 5: TypeDonneesToString = "Double"
+        Case 6: TypeDonneesToString = "Monétaire"
+        Case 7: TypeDonneesToString = "Date/Heure"
+        Case 8: TypeDonneesToString = "Texte"
+        Case 9: TypeDonneesToString = "Memo"
+        Case 10: TypeDonneesToString = "OLE"
+        Case 11: TypeDonneesToString = "Lien hypertexte"
+        Case Else: TypeDonneesToString = "Inconnu (" & typeDonnees & ")"
     End Select
 End Function
+
+Private Function TypeRequeteToString(typeRequete As Integer) As String
+    Select Case typeRequete
+        Case 0: TypeRequeteToString = "Sélection"
+        Case 1: TypeRequeteToString = "Table de création"
+        Case 2: TypeRequeteToString = "Sélection avec jointure"
+        Case 3: TypeRequeteToString = "Ajout"
+        Case 4: TypeRequeteToString = "Mise à jour"
+        Case 5: TypeRequeteToString = "Suppression"
+        Case 6: TypeRequeteToString = "Crosstab"
+        Case Else: TypeRequeteToString = "Inconnu (" & typeRequete & ")"
+    End Select
+End Function
+
+Private Function TypeControleToString(typeControle As Integer) As String
+    Select Case typeControle
+        Case 100: TypeControleToString = "Label"
+        Case 101: TypeControleToString = "Rectangle"
+        Case 102: TypeControleToString = "Line"
+        Case 103: TypeControleToString = "Image"
+        Case 104: TypeControleToString = "CommandButton"
+        Case 105: TypeControleToString = "OptionButton"
+        Case 106: TypeControleToString = "CheckBox"
+        Case 107: TypeControleToString = "OptionGroup"
+        Case 108: TypeControleToString = "BoundObjectFrame"
+        Case 109: TypeControleToString = "TextBox"
+        Case 110: TypeControleToString = "ListBox"
+        Case 111: TypeControleToString = "ComboBox"
+        Case 112: TypeControleToString = "Subform/Subreport"
+        Case 113: TypeControleToString = "ObjectFrame"
+        Case 114: TypeControleToString = "PageBreak"
+        Case 115: TypeControleToString = "CustomControl"
+        Case 116: TypeControleToString = "ToggleButton"
+        Case Else: TypeControleToString = "Inconnu (" & typeControle & ")"
+    End Select
+End Function
+
+' Fonction pour documenter un état spécifique
+Public Sub DocumenterEtatSpecifique(nomEtat As String)
+    Dim xlApp As Object
+    Dim xlWB As Object
+    Dim xlWS As Object
+    Dim rpt As Object
+    Dim ctl As Control
+    Dim ligne As Integer
+    Dim timestamp As String
+    
+    timestamp = Format(Now(), "yyyy-mm-dd_hh-nn-ss")
+    
+    On Error GoTo ErreurHandler
+    
+    ' Ouvrir l'état en mode design
+    DoCmd.OpenReport nomEtat, acViewDesign
+    Set rpt = Reports(nomEtat)
+    
+    ' Créer Excel
+    Set xlApp = CreateObject("Excel.Application")
+    xlApp.Visible = True
+    Set xlWB = xlApp.Workbooks.Add
+    Set xlWS = xlWB.ActiveSheet
+    xlWS.Name = "État_" & nomEtat
+    
+    ' En-têtes
+    With xlWS
+        .Cells(1, 1) = "Nom Contrôle"
+        .Cells(1, 2) = "Type"
+        .Cells(1, 3) = "Source/Formule"
+        .Cells(1, 4) = "Visible"
+        .Cells(1, 5) = "Position (Top)"
+        .Cells(1, 6) = "Position (Left)"
+        .Cells(1, 7) = "Largeur"
+        .Cells(1, 8) = "Hauteur"
+        
+        For ligne = 1 To 8
+            .Cells(1, ligne).Font.Bold = True
+            .Cells(1, ligne).Interior.Color = RGB(200, 200, 200)
+        Next ligne
+    End With
+    
+    ligne = 2
+    
+    ' Parcourir tous les contrôles
+    For Each ctl In rpt.Controls
+        xlWS.Cells(ligne, 1) = ctl.Name
+        xlWS.Cells(ligne, 2) = TypeControleToString(ctl.ControlType)
+        xlWS.Cells(ligne, 3) = Nz(ctl.ControlSource, Nz(ctl.Properties("ControlSource"), ""))
+        xlWS.Cells(ligne, 4) = IIf(ctl.Visible, "Oui", "Non")
+        xlWS.Cells(ligne, 5) = ctl.Top
+        xlWS.Cells(ligne, 6) = ctl.Left
+        xlWS.Cells(ligne, 7) = ctl.Width
+        xlWS.Cells(ligne, 8) = ctl.Height
+        
+        ligne = ligne + 1
+    Next ctl
+    
+    xlWS.Columns.AutoFit
+    xlWS.Columns(3).ColumnWidth = 50
+    xlWS.Columns(3).WrapText = True
+    
+    ' Sauvegarder
+    xlWB.SaveAs CurrentProject.Path & "\Documentation_" & nomEtat & "_" & timestamp & ".xlsx"
+    
+    DoCmd.Close acReport, nomEtat, acSaveNo
+    
+    MsgBox "Documentation de l'état '" & nomEtat & "' terminée !", vbInformation
+    
+Nettoyage:
+    On Error Resume Next
+    Set xlWS = Nothing
+    Set xlWB = Nothing
+    Set xlApp = Nothing
+    Set rpt = Nothing
+    Exit Sub
+    
+ErreurHandler:
+    MsgBox "Erreur: " & Err.Description, vbCritical
+    Resume Nettoyage
+End Sub
