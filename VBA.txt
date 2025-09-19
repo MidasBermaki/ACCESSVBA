@@ -107,8 +107,13 @@ NextRpt:
         .Columns("A:L").AutoFit
         .Rows.AutoFit
         
-        ' Ajouter un tableau Excel pour faciliter le filtrage
-        .ListObjects.Add(xlSrcRange, .Range("A1:L" & (ligne - 1)), , xlYes).Name = "TableauDocumentation"
+        ' Ajouter un tableau Excel pour faciliter le filtrage (utilisation de valeurs numériques au lieu de constantes)
+        Dim tblRange As Object
+        Set tblRange = .Range("A1:L" & (ligne - 1))
+        
+        ' Créer le tableau avec les valeurs numériques des constantes Excel
+        ' xlSrcRange = -4154, xlYes = 1
+        .ListObjects.Add(-4154, tblRange, , 1).Name = "TableauDocumentation"
         .ListObjects("TableauDocumentation").TableStyle = "TableStyleMedium9"
     End With
     
