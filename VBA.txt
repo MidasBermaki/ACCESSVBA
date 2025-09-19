@@ -55,42 +55,42 @@ Public Sub DocumenterTousLesEtats()
         If Err.Number <> 0 Then
             Debug.Print "Impossible d'ouvrir l'état: " & objRpt.Name & " - " & Err.Description
             Err.Clear
-            GoNextRpt:
+            GoTo NextRpt
         Else
             Set rpt = Reports(objRpt.Name)
             
             ' Parcourir les contrôles de l'état
             For Each ctrl In rpt.Controls
                 With xlWS
-                    .Cells(ligne, 1).Value = objRpt.Name
-                    .Cells(ligne, 2).Value = ObtenirNomSection(ctrl.Section)
-                    .Cells(ligne, 3).Value = ctrl.Name
-                    .Cells(ligne, 4).Value = TypeName(ctrl)
+                    .Range("A" & ligne).Value = objRpt.Name
+                    .Range("B" & ligne).Value = ObtenirNomSection(ctrl.Section)
+                    .Range("C" & ligne).Value = ctrl.Name
+                    .Range("D" & ligne).Value = TypeName(ctrl)
                     
                     ' Analyser les sources de données selon le type de contrôle
                     Select Case ctrl.ControlType
                     Case acTextBox
-                        .Cells(ligne, 5).Value = Nz(ctrl.ControlSource, "")
+                        .Range("E" & ligne).Value = Nz(ctrl.ControlSource, "")
                         If Nz(ctrl.ControlSource, "") <> "" Then
                             If Left(ctrl.ControlSource, 1) = "=" Then
-                                .Cells(ligne, 6).Value = ctrl.ControlSource
+                                .Range("F" & ligne).Value = ctrl.ControlSource
                             Else
-                                .Cells(ligne, 5).Value = ctrl.ControlSource
+                                .Range("E" & ligne).Value = ctrl.ControlSource
                                 AnalyserSourceDonnees db, ctrl.ControlSource, xlWS, ligne
                             End If
                         End If
                     Case acComboBox, acListBox
-                        .Cells(ligne, 5).Value = Nz(ctrl.RowSource, "")
+                        .Range("E" & ligne).Value = Nz(ctrl.RowSource, "")
                         AnalyserSourceDonnees db, ctrl.RowSource, xlWS, ligne
                     Case acLabel
-                        .Cells(ligne, 11).Value = Nz(ctrl.Caption, "")
+                        .Range("K" & ligne).Value = Nz(ctrl.Caption, "")
                     Case Else
-                        .Cells(ligne, 5).Value = Nz(ctrl.ControlSource, "")
+                        .Range("E" & ligne).Value = Nz(ctrl.ControlSource, "")
                     End Select
                     
                     ' Propriétés supplémentaires
-                    .Cells(ligne, 9).Value = Nz(ctrl.Format, "")
-                    .Cells(ligne, 10).Value = ctrl.Visible
+                    .Range("I" & ligne).Value = Nz(ctrl.Format, "")
+                    .Range("J" & ligne).Value = ctrl.Visible
                     
                     ligne = ligne + 1
                 End With
@@ -98,6 +98,8 @@ Public Sub DocumenterTousLesEtats()
             
             DoCmd.Close acReport, objRpt.Name, acSaveNo
         End If
+        
+NextRpt:
     Next objRpt
     
     ' Ajuster la mise en forme Excel
@@ -121,14 +123,14 @@ Public Sub DocumenterTousLesEtats()
     
     MsgBox "Documentation générée avec succès!" & vbCrLf & "Fichier: " & cheminFichier, vbInformation
     
-    Nettoyage:
-        Set ctrl = Nothing
-        Set rpt = Nothing
-        Set objRpt = Nothing
-        Set db = Nothing
-        Set xlWS = Nothing
-        Set xlWB = Nothing
-        Set xlApp = Nothing
+Nettoyage:
+    Set ctrl = Nothing
+    Set rpt = Nothing
+    Set objRpt = Nothing
+    Set db = Nothing
+    Set xlWS = Nothing
+    Set xlWB = Nothing
+    Set xlApp = Nothing
     Exit Sub
     
 ErreurHandler:
@@ -136,8 +138,8 @@ ErreurHandler:
     Resume Nettoyage
 End Sub
 
-Private Function ObtenirNomSection(section As Section) As String
-    Select Case section
+Private Function ObtenirNomSection(sectionCode As Integer) As String
+    Select Case sectionCode
         Case 0: ObtenirNomSection = "Détail"
         Case 1: ObtenirNomSection = "En-tête"
         Case 2: ObtenirNomSection = "Pied de page"
@@ -145,17 +147,15 @@ Private Function ObtenirNomSection(section As Section) As String
         Case 4: ObtenirNomSection = "Pied de page"
         Case 5: ObtenirNomSection = "En-tête de groupe"
         Case 6: ObtenirNomSection = "Pied de groupe"
-        Case Else: ObtenirNomSection = "Inconnu (" & section & ")"
+        Case Else: ObtenirNomSection = "Inconnu (" & sectionCode & ")"
     End Select
 End Function
 
 Private Sub AnalyserSourceDonnees(db As Database, source As String, xlWS As Object, ligne As Integer)
     On Error Resume Next
     
-    Dim i As Integer
     Dim qdf As QueryDef
     Dim tdf As TableDef
-    Dim sql As String
     Dim nomSource As String
     
     ' Nettoyer la source (enlever les éventuels points-virgules)
@@ -164,8 +164,8 @@ Private Sub AnalyserSourceDonnees(db As Database, source As String, xlWS As Obje
     ' Vérifier si c'est une requête
     For Each qdf In db.QueryDefs
         If qdf.Name = nomSource Then
-            xlWS.Cells(ligne, 7).Value = nomSource
-            xlWS.Cells(ligne, 8).Value = ExtraireTablesRequete(qdf.SQL)
+            xlWS.Range("G" & ligne).Value = nomSource
+            xlWS.Range("H" & ligne).Value = ExtraireTablesRequete(qdf.SQL)
             Exit For
         End If
     Next qdf
@@ -173,7 +173,7 @@ Private Sub AnalyserSourceDonnees(db As Database, source As String, xlWS As Obje
     ' Vérifier si c'est une table
     For Each tdf In db.TableDefs
         If tdf.Name = nomSource And Left(tdf.Name, 4) <> "MSys" Then
-            xlWS.Cells(ligne, 8).Value = nomSource
+            xlWS.Range("H" & ligne).Value = nomSource
             Exit For
         End If
     Next tdf
@@ -181,21 +181,21 @@ Private Sub AnalyserSourceDonnees(db As Database, source As String, xlWS As Obje
     ' Vérifier si c'est une expression SQL directe
     If InStr(1, nomSource, "SELECT", vbTextCompare) > 0 Or _
        InStr(1, nomSource, "FROM", vbTextCompare) > 0 Then
-        xlWS.Cells(ligne, 8).Value = ExtraireTablesRequete(nomSource)
+        xlWS.Range("H" & ligne).Value = ExtraireTablesRequete(nomSource)
     End If
 End Sub
 
-Private Function ExtraireTablesRequete(sql As String) As String
+Private Function ExtraireTablesRequete(sqlText As String) As String
     Dim mots() As String
     Dim i As Integer
     Dim dansFrom As Boolean
     Dim tables As String
     
-    If sql = "" Then Exit Function
+    If sqlText = "" Then Exit Function
     
     ' Normaliser le SQL
-    sql = Replace(Replace(sql, vbCrLf, " "), vbTab, " ")
-    mots = Split(sql, " ")
+    sqlText = Replace(Replace(sqlText, vbCrLf, " "), vbTab, " ")
+    mots = Split(sqlText, " ")
     
     dansFrom = False
     For i = LBound(mots) To UBound(mots)
@@ -218,7 +218,11 @@ Private Function ExtraireTablesRequete(sql As String) As String
         End If
     Next i
     
-    ExtraireTablesRequete = Left(tables, Len(tables) - 2) ' Enlever le dernier "; "
+    If Len(tables) > 2 Then
+        ExtraireTablesRequete = Left(tables, Len(tables) - 2) ' Enlever le dernier "; "
+    Else
+        ExtraireTablesRequete = tables
+    End If
 End Function
 
 Private Function IsExcelInstalled() As Boolean
@@ -232,130 +236,4 @@ Private Function IsExcelInstalled() As Boolean
         IsExcelInstalled = False
     End If
     Set xl = Nothing
-End Function
-
-' Fonction pour documenter également les paramètres des états
-Public Sub DocumenterParametresEtats()
-    On Error GoTo ErreurHandler
-    
-    Dim db As Database
-    Dim objRpt As AccessObject
-    Dim rpt As Report
-    Dim ctrl As Control
-    Dim xlApp As Object, xlWB As Object, xlWS As Object
-    Dim ligne As Integer
-    Dim cheminFichier As String
-    Dim nomFichier As String
-    
-    ' Initialisation Excel
-    Set xlApp = CreateObject("Excel.Application")
-    Set xlWB = xlApp.Workbooks.Add
-    Set xlWS = xlWB.Sheets(1)
-    xlApp.Visible = True
-    
-    ' Configuration de la feuille Excel
-    With xlWS
-        .Range("A1").Value = "Nom état"
-        .Range("B1").Value = "Paramètre"
-        .Range("C1").Value = "Type données"
-        .Range("D1").Value = "Valeur par défaut"
-        .Range("E1").Value = "Description"
-        
-        ' Mise en forme des en-têtes
-        .Rows(1).Font.Bold = True
-        .Rows(1).HorizontalAlignment = -4108 ' Centre
-    End With
-    
-    ligne = 2
-    Set db = CurrentDb()
-    
-    ' Parcourir tous les états
-    For Each objRpt In CurrentProject.AllReports
-        On Error Resume Next
-        
-        ' Vérifier si l'état a des paramètres
-        If EtatAParametres(objRpt.Name) Then
-            .Cells(ligne, 1).Value = objRpt.Name
-            .Cells(ligne, 2).Value = "Date de début"
-            .Cells(ligne, 3).Value = "Date/Heure"
-            .Cells(ligne, 4).Value = "Paramètre utilisateur"
-            ligne = ligne + 1
-            
-            .Cells(ligne, 1).Value = objRpt.Name
-            .Cells(ligne, 2).Value = "Date de fin"
-            .Cells(ligne, 3).Value = "Date/Heure"
-            .Cells(ligne, 4).Value = "Paramètre utilisateur"
-            ligne = ligne + 1
-        End If
-    Next objRpt
-    
-    ' Ajuster la mise en forme Excel
-    With xlWS
-        .Columns("A:E").AutoFit
-        .Rows.AutoFit
-        
-        ' Ajouter un tableau Excel
-        .ListObjects.Add(xlSrcRange, .Range("A1:E" & (ligne - 1)), , xlYes).Name = "TableauParametres"
-        .ListObjects("TableauParametres").TableStyle = "TableStyleMedium9"
-    End With
-    
-    ' Sauvegarde automatique
-    nomFichier = "DocumentationParametresEtats_" & Format(Now(), "yyyy-mm-dd_hhmmss") & ".xlsx"
-    cheminFichier = CurrentProject.Path & "\" & nomFichier
-    xlWB.SaveAs cheminFichier
-    
-    ' Fermer Excel
-    xlWB.Close True
-    xlApp.Quit
-    
-    MsgBox "Documentation des paramètres générée avec succès!" & vbCrLf & "Fichier: " & cheminFichier, vbInformation
-    
-    Nettoyage:
-        Set ctrl = Nothing
-        Set rpt = Nothing
-        Set objRpt = Nothing
-        Set db = Nothing
-        Set xlWS = Nothing
-        Set xlWB = Nothing
-        Set xlApp = Nothing
-    Exit Sub
-    
-ErreurHandler:
-    MsgBox "Erreur " & Err.Number & ": " & Err.Description, vbCritical
-    Resume Nettoyage
-End Sub
-
-Private Function EtatAParametres(nomEtat As String) As Boolean
-    ' Cette fonction détecte si un état demande des paramètres à l'ouverture
-    ' Méthode simple: vérifier si l'état contient des références à [Date de début] ou [Date de fin]
-    On Error Resume Next
-    Dim rpt As Report
-    Dim hasParams As Boolean
-    
-    hasParams = False
-    
-    DoCmd.OpenReport nomEtat, acViewDesign, , , acHidden
-    If Err.Number = 0 Then
-        Set rpt = Reports(nomEtat)
-        
-        ' Vérifier le source de l'état
-        If InStr(1, rpt.RecordSource, "[Date de début]", vbTextCompare) > 0 Or _
-           InStr(1, rpt.RecordSource, "[Date de fin]", vbTextCompare) > 0 Then
-            hasParams = True
-        Else
-            ' Vérifier les contrôles
-            Dim ctrl As Control
-            For Each ctrl In rpt.Controls
-                If InStr(1, Nz(ctrl.ControlSource, ""), "[Date de début]", vbTextCompare) > 0 Or _
-                   InStr(1, Nz(ctrl.ControlSource, ""), "[Date de fin]", vbTextCompare) > 0 Then
-                    hasParams = True
-                    Exit For
-                End If
-            Next ctrl
-        End If
-        
-        DoCmd.Close acReport, nomEtat, acSaveNo
-    End If
-    
-    EtatAParametres = hasParams
 End Function
