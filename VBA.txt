@@ -17,6 +17,8 @@ Sub GenererDocumentationAccess()
     Dim strFilePath As String
     Dim strFileName As String
     Dim i As Long
+    Dim idx As DAO.Index ' Ajouté pour la gestion des index
+    Dim fldIdx As DAO.Field ' Ajouté pour les champs d'index
 
     On Error GoTo ErrorHandler
 
@@ -78,26 +80,31 @@ Sub GenererDocumentationAccess()
     currentRow = 2
     For Each tblDef In db.TableDefs
         ' Ignorer les tables système et temporaires
-        If Left(tblDef.Name, 4) <> "MSys" And Left(tblDef.Name, 1) <> "~" Then
+        If Left(tblDef.Name, 4) <> "MSys" And Left(tblDef.Name, 1) <> "~" And Not (tblDef.Attributes And dbHiddenObject) Then
             For Each fld In tblDef.Fields
                 wksTables.Cells(currentRow, 1).Value = tblDef.Name
                 wksTables.Cells(currentRow, 2).Value = fld.Name
-                wksTables.Cells(currentRow, 3).Value = fld.Type ' Ceci retourne un numéro, on peut le mapper si besoin
-                wksTables.Cells(currentRow, 4).Value = IIf(fld.Type = dbText, fld.Size, "") ' La taille n'a de sens que pour le texte
+                wksTables.Cells(currentRow, 3).Value = GetDataTypeName(fld.Type) ' Utilisation d'une fonction pour le nom du type
+                wksTables.Cells(currentRow, 4).Value = IIf(fld.Type = dbText Or fld.Type = dbMemo, fld.Size, "") ' La taille n'a de sens que pour le texte/mémo
                 
-                ' Vérifier si le champ fait partie de la clé primaire
+                ' Vérifier si le champ fait partie de la clé primaire (Nouvelle méthode)
                 Dim isPrimaryKey As Boolean
                 isPrimaryKey = False
-                If tblDef.Attributes And dbSystemObject Then ' Si c'est une table système, ne pas vérifier les clés
-                   ' Do nothing
-                ElseIf tblDef.PrimaryIndex.Fields.Count > 0 Then
-                    For i = 0 To tblDef.PrimaryIndex.Fields.Count - 1
-                        If tblDef.PrimaryIndex.Fields(i) = fld.Name Then
-                            isPrimaryKey = True
-                            Exit For
-                        End If
-                    Next i
-                End If
+                
+                On Error Resume Next ' Gérer les erreurs si une table n'a pas d'index
+                For Each idx In tblDef.Indexes
+                    If idx.Primary Then ' Si c'est un index primaire
+                        For Each fldIdx In idx.Fields
+                            If fldIdx.Name = fld.Name Then
+                                isPrimaryKey = True
+                                Exit For ' Trouvé dans la clé primaire
+                            End If
+                        Next fldIdx
+                    End If
+                    If isPrimaryKey Then Exit For ' Inutile de chercher d'autres index
+                Next idx
+                On Error GoTo ErrorHandler ' Réactiver la gestion d'erreur générale
+                
                 wksTables.Cells(currentRow, 5).Value = IIf(isPrimaryKey, "Oui", "Non")
                 
                 currentRow = currentRow + 1
@@ -110,7 +117,7 @@ Sub GenererDocumentationAccess()
     currentRow = 2
     For Each qDef In db.QueryDefs
         ' Ignorer les requêtes système et temporaires
-        If Left(qDef.Name, 4) <> "~sq_" Then ' ~sq_ sont des requêtes temporaires créées par Access
+        If Left(qDef.Name, 4) <> "~sq_" And Not (qDef.Attributes And dbSystemObject) And Not (qDef.Attributes And dbHiddenObject) Then
             wksQueries.Cells(currentRow, 1).Value = qDef.Name
             wksQueries.Cells(currentRow, 2).Value = qDef.SQL
             currentRow = currentRow + 1
@@ -144,9 +151,11 @@ Sub GenererDocumentationAccess()
     wksReports.Columns.AutoFit
 
     ' --- 6. Enregistrer le fichier Excel ---
-    wbk.SaveAs strFilePath
+    wbk.SaveAs strFilePath, FileFormat:=xlOpenXMLWorkbook ' Spécifier le format pour .xlsx
     
     ' --- 7. Nettoyage ---
+    Set fldIdx = Nothing
+    Set idx = Nothing
     Set ctl = Nothing
     Set rpt = Nothing
     Set qDef = Nothing
@@ -156,6 +165,12 @@ Sub GenererDocumentationAccess()
     Set wksReports = Nothing
     Set wksQueries = Nothing
     Set wksTables = Nothing
+    If Not wbk Is Nothing Then
+        wbk.Close SaveChanges:=False
+    End If
+    If Not appExcel Is Nothing Then
+        appExcel.Quit
+    End If
     Set wbk = Nothing
     Set appExcel = Nothing
 
@@ -163,7 +178,7 @@ Sub GenererDocumentationAccess()
     Exit Sub
 
 ErrorHandler:
-    MsgBox "Une erreur est survenue : " & Err.Description & " (Numéro: " & Err.Number & ")", vbCritical
+    MsgBox "Une erreur est survenue : " & Err.Description & " (Numéro: " & Err.Number & ") à l'étape " & currentRow, vbCritical
     If Not wbk Is Nothing Then
         On Error Resume Next
         wbk.Close SaveChanges:=False
@@ -176,3 +191,25 @@ ErrorHandler:
     End If
     Set appExcel = Nothing
 End Sub
+
+' --- Nouvelle fonction pour obtenir le nom lisible du type de données ---
+Function GetDataTypeName(DataType As DAO.DataTypeEnum) As String
+    Select Case DataType
+        Case dbBoolean: GetDataTypeName = "Oui/Non"
+        Case dbByte: GetDataTypeName = "Octet"
+        Case dbInteger: GetDataTypeName = "Entier"
+        Case dbLong: GetDataTypeName = "Entier Long"
+        Case dbCurrency: GetDataTypeName = "Monétaire"
+        Case dbSingle: GetDataTypeName = "Réel Simple"
+        Case dbDouble: GetDataTypeName = "Réel Double"
+        Case dbDate: GetDataTypeName = "Date/Heure"
+        Case dbText: GetDataTypeName = "Texte"
+        Case dbLongBinary: GetDataTypeName = "Objet OLE"
+        Case dbMemo: GetDataTypeName = "Mémo"
+        Case dbGUID: GetDataTypeName = "ID de Réplication"
+        Case dbBigInt: GetDataTypeName = "Grand Entier"
+        Case dbVarChar: GetDataTypeName = "Texte long" ' Pour les versions plus récentes
+        Case dbNumeric: GetDataTypeName = "Numérique"
+        Case Else: GetDataTypeName = "Inconnu (" & DataType & ")"
+    End Select
+End Function
