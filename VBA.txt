@@ -31,8 +31,8 @@ Public Sub DocumenterEtatsComplet()
         .Range("B1").Value = "Section"
         .Range("C1").Value = "Nom controle"
         .Range("D1").Value = "Type de selection"
-        .Range("E1").Value = "Est calcul"
-        .Range("F1").Value = "Source controle"
+        .Range("E1").Value = "Source controle"
+        .Range("F1").Value = "Est calcul"
         .Range("G1").Value = "Détail calcul"
         .Range("H1").Value = "Composants calcul"
         .Range("I1").Value = "Requête source"
@@ -67,14 +67,26 @@ Public Sub DocumenterEtatsComplet()
                     .Range("C" & ligne).Value = ctrl.Name
                     .Range("D" & ligne).Value = ObtenirTypeControle(ctrl.ControlType)
                     
-                    ' Déterminer si c'est un calcul
+                    ' Source du contrôle (format du code 1)
+                    If Nz(ctrl.ControlSource, "") <> "" Then
+                        If Left(ctrl.ControlSource, 1) = "=" Then
+                            .Range("E" & ligne).Value = "Calcul: " & ctrl.ControlSource
+                        Else
+                            .Range("E" & ligne).Value = "Source: " & ctrl.ControlSource
+                        End If
+                    ElseIf Nz(ctrl.RowSource, "") <> "" Then
+                        .Range("E" & ligne).Value = "Liste: " & ctrl.RowSource
+                    Else
+                        .Range("E" & ligne).Value = "Aucune source"
+                    End If
+                    
+                    ' Déterminer si c'est un calcul (colonnes du code 2)
                     Dim estCalcul As Boolean
                     estCalcul = (Nz(ctrl.ControlSource, "") <> "" And Left(ctrl.ControlSource, 1) = "=")
-                    .Range("E" & ligne).Value = IIf(estCalcul, "Oui", "Non")
+                    .Range("F" & ligne).Value = IIf(estCalcul, "Oui", "Non")
                     
-                    ' Source du contrôle
+                    ' Analyser les détails du calcul
                     If estCalcul Then
-                        .Range("F" & ligne).Value = ctrl.ControlSource
                         .Range("G" & ligne).Value = "Expression de calcul"
                         
                         ' Analyser les composants du calcul
@@ -90,7 +102,6 @@ Public Sub DocumenterEtatsComplet()
                         ' Extraire les tables et relations
                         .Range("J" & ligne).Value = ExtraireTablesEtRelations(db, detailsRequetes)
                     ElseIf Nz(ctrl.ControlSource, "") <> "" Then
-                        .Range("F" & ligne).Value = ctrl.ControlSource
                         .Range("G" & ligne).Value = "Champ direct"
                         .Range("H" & ligne).Value = "N/A"
                         
@@ -102,7 +113,6 @@ Public Sub DocumenterEtatsComplet()
                         ' Extraire les tables et relations
                         .Range("J" & ligne).Value = ExtraireTablesEtRelations(db, sourceInfo)
                     ElseIf Nz(ctrl.RowSource, "") <> "" Then
-                        .Range("F" & ligne).Value = ctrl.RowSource
                         .Range("G" & ligne).Value = "Liste de valeurs"
                         .Range("H" & ligne).Value = "N/A"
                         
@@ -110,7 +120,6 @@ Public Sub DocumenterEtatsComplet()
                         .Range("I" & ligne).Value = AnalyserSourceListe(db, ctrl.RowSource)
                         .Range("J" & ligne).Value = ExtraireTablesEtRelations(db, ctrl.RowSource)
                     Else
-                        .Range("F" & ligne).Value = "Aucune source"
                         .Range("G" & ligne).Value = "N/A"
                         .Range("H" & ligne).Value = "N/A"
                         .Range("I" & ligne).Value = "N/A"
@@ -231,7 +240,6 @@ End Function
 Private Function ExtraireComposantsCalcul(calcul As String) As String
     Dim composants As String
     Dim i As Integer
-    Dim j As Integer
     Dim dansChamp As Boolean
     Dim caractere As String
     
