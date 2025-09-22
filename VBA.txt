@@ -1,7 +1,7 @@
 Option Compare Database
 Option Explicit
 
-Public Sub DocumenterEtatsSpecifiques()
+Public Sub DocumenterEtatsComplet()
     On Error GoTo ErreurHandler
     
     Dim db As Database
@@ -25,16 +25,20 @@ Public Sub DocumenterEtatsSpecifiques()
     Set xlWS = xlWB.Sheets(1)
     xlApp.Visible = True
     
-    ' Configuration de la feuille Excel selon le format demandé
+    ' Configuration de la feuille Excel avec les colonnes demandées
     With xlWS
         .Range("A1").Value = "Nom état"
         .Range("B1").Value = "Section"
         .Range("C1").Value = "Nom controle"
         .Range("D1").Value = "Type de selection"
-        .Range("E1").Value = "Source controle"
-        .Range("F1").Value = "Format de texte"
-        .Range("G1").Value = "Cumul"
-        .Range("H1").Value = "Requête source"
+        .Range("E1").Value = "Est calcul"
+        .Range("F1").Value = "Source controle"
+        .Range("G1").Value = "Détail calcul"
+        .Range("H1").Value = "Composants calcul"
+        .Range("I1").Value = "Requête source"
+        .Range("J1").Value = "Tables et relations"
+        .Range("K1").Value = "Format de texte"
+        .Range("L1").Value = "Cumul"
         
         ' Mise en forme des en-têtes
         .Rows(1).Font.Bold = True
@@ -63,36 +67,64 @@ Public Sub DocumenterEtatsSpecifiques()
                     .Range("C" & ligne).Value = ctrl.Name
                     .Range("D" & ligne).Value = ObtenirTypeControle(ctrl.ControlType)
                     
-                    ' Source du contrôle (comment il est calculé)
-                    If Nz(ctrl.ControlSource, "") <> "" Then
-                        If Left(ctrl.ControlSource, 1) = "=" Then
-                            .Range("E" & ligne).Value = "Calcul: " & ctrl.ControlSource
-                        Else
-                            .Range("E" & ligne).Value = "Source: " & ctrl.ControlSource
-                        End If
+                    ' Déterminer si c'est un calcul
+                    Dim estCalcul As Boolean
+                    estCalcul = (Nz(ctrl.ControlSource, "") <> "" And Left(ctrl.ControlSource, 1) = "=")
+                    .Range("E" & ligne).Value = IIf(estCalcul, "Oui", "Non")
+                    
+                    ' Source du contrôle
+                    If estCalcul Then
+                        .Range("F" & ligne).Value = ctrl.ControlSource
+                        .Range("G" & ligne).Value = "Expression de calcul"
+                        
+                        ' Analyser les composants du calcul
+                        Dim composants As String
+                        composants = ExtraireComposantsCalcul(ctrl.ControlSource)
+                        .Range("H" & ligne).Value = composants
+                        
+                        ' Trouver les requêtes sources pour les composants
+                        Dim detailsRequetes As String
+                        detailsRequetes = AnalyserComposantsCalcul(db, composants)
+                        .Range("I" & ligne).Value = detailsRequetes
+                        
+                        ' Extraire les tables et relations
+                        .Range("J" & ligne).Value = ExtraireTablesEtRelations(db, detailsRequetes)
+                    ElseIf Nz(ctrl.ControlSource, "") <> "" Then
+                        .Range("F" & ligne).Value = ctrl.ControlSource
+                        .Range("G" & ligne).Value = "Champ direct"
+                        .Range("H" & ligne).Value = "N/A"
+                        
+                        ' Trouver la source du champ
+                        Dim sourceInfo As String
+                        sourceInfo = TrouverSourceChamp(db, ctrl.ControlSource)
+                        .Range("I" & ligne).Value = sourceInfo
+                        
+                        ' Extraire les tables et relations
+                        .Range("J" & ligne).Value = ExtraireTablesEtRelations(db, sourceInfo)
                     ElseIf Nz(ctrl.RowSource, "") <> "" Then
-                        .Range("E" & ligne).Value = "Liste: " & ctrl.RowSource
+                        .Range("F" & ligne).Value = ctrl.RowSource
+                        .Range("G" & ligne).Value = "Liste de valeurs"
+                        .Range("H" & ligne).Value = "N/A"
+                        
+                        ' Analyser la source de la liste
+                        .Range("I" & ligne).Value = AnalyserSourceListe(db, ctrl.RowSource)
+                        .Range("J" & ligne).Value = ExtraireTablesEtRelations(db, ctrl.RowSource)
                     Else
-                        .Range("E" & ligne).Value = "Aucune source"
+                        .Range("F" & ligne).Value = "Aucune source"
+                        .Range("G" & ligne).Value = "N/A"
+                        .Range("H" & ligne).Value = "N/A"
+                        .Range("I" & ligne).Value = "N/A"
+                        .Range("J" & ligne).Value = "N/A"
                     End If
                     
                     ' Format de texte
-                    .Range("F" & ligne).Value = Nz(ctrl.Format, "")
+                    .Range("K" & ligne).Value = Nz(ctrl.Format, "")
                     
                     ' Cumul (pour les zones de texte)
                     If ctrl.ControlType = acTextBox Then
-                        .Range("G" & ligne).Value = ObtenirCumul(ctrl)
+                        .Range("L" & ligne).Value = ObtenirCumul(ctrl)
                     Else
-                        .Range("G" & ligne).Value = "N/A"
-                    End If
-                    
-                    ' Requête source
-                    If ctrl.ControlType = acComboBox Or ctrl.ControlType = acListBox Then
-                        .Range("H" & ligne).Value = Nz(ctrl.RowSource, "")
-                    ElseIf Nz(ctrl.ControlSource, "") <> "" And Left(ctrl.ControlSource, 1) <> "=" Then
-                        .Range("H" & ligne).Value = ObtenirRequeteSource(db, ctrl.ControlSource)
-                    Else
-                        .Range("H" & ligne).Value = "N/A"
+                        .Range("L" & ligne).Value = "N/A"
                     End If
                     
                     ligne = ligne + 1
@@ -107,18 +139,18 @@ NextRpt:
     
     ' Ajuster la mise en forme Excel
     With xlWS
-        .Columns("A:H").AutoFit
+        .Columns("A:L").AutoFit
         .Rows.AutoFit
         
         ' Ajouter un tableau Excel pour faciliter le filtrage
         Dim tblRange As Object
-        Set tblRange = .Range("A1:H" & (ligne - 1))
+        Set tblRange = .Range("A1:L" & (ligne - 1))
         .ListObjects.Add(-4154, tblRange, , 1).Name = "TableauDocumentation"
         .ListObjects("TableauDocumentation").TableStyle = "TableStyleMedium9"
     End With
     
     ' Sauvegarde automatique
-    nomFichier = "DocumentationEtats_FormatSpecifique_" & Format(Now(), "yyyy-mm-dd_hhmmss") & ".xlsx"
+    nomFichier = "DocumentationEtats_Complete_" & Format(Now(), "yyyy-mm-dd_hhmmss") & ".xlsx"
     cheminFichier = CurrentProject.Path & "\" & nomFichier
     xlWB.SaveAs cheminFichier
     
@@ -196,34 +228,211 @@ Private Function ObtenirCumul(ctrl As Control) As String
     End If
 End Function
 
-Private Function ObtenirRequeteSource(db As Database, source As String) As String
-    On Error Resume Next
+Private Function ExtraireComposantsCalcul(calcul As String) As String
+    Dim composants As String
+    Dim i As Integer
+    Dim j As Integer
+    Dim dansChamp As Boolean
+    Dim caractere As String
     
+    composants = ""
+    dansChamp = False
+    
+    ' Parcourir chaque caractère du calcul
+    For i = 1 To Len(calcul)
+        caractere = Mid(calcul, i, 1)
+        
+        If caractere = "[" Then
+            dansChamp = True
+            composants = composants & "["
+        ElseIf caractere = "]" Then
+            dansChamp = False
+            composants = composants & "]; "
+        ElseIf dansChamp Then
+            composants = composants & caractere
+        End If
+    Next i
+    
+    ' Nettoyer le résultat
+    If Right(composants, 2) = "; " Then
+        composants = Left(composants, Len(composants) - 2)
+    End If
+    
+    ExtraireComposantsCalcul = composants
+End Function
+
+Private Function AnalyserComposantsCalcul(db As Database, composants As String) As String
+    Dim resultat As String
+    Dim champs() As String
+    Dim i As Integer
+    
+    resultat = ""
+    
+    ' Séparer les composants
+    champs = Split(composants, "; ")
+    
+    For i = LBound(champs) To UBound(champs)
+        If champs(i) <> "" Then
+            ' Nettoyer le nom du champ (enlever les crochets)
+            Dim nomChamp As String
+            nomChamp = Replace(Replace(champs(i), "[", ""), "]", "")
+            
+            ' Trouver la source de ce champ
+            Dim sourceChamp As String
+            sourceChamp = TrouverSourceChamp(db, nomChamp)
+            
+            resultat = resultat & nomChamp & ": " & sourceChamp & "; "
+        End If
+    Next i
+    
+    ' Nettoyer le résultat
+    If Right(resultat, 2) = "; " Then
+        resultat = Left(resultat, Len(resultat) - 2)
+    End If
+    
+    AnalyserComposantsCalcul = resultat
+End Function
+
+Private Function TrouverSourceChamp(db As Database, nomChamp As String) As String
     Dim qdf As QueryDef
     Dim tdf As TableDef
-    Dim nomSource As String
+    Dim fld As Field
+    Dim resultat As String
     
-    ' Nettoyer la source (enlever les éventuels crochets)
-    nomSource = Replace(Replace(source, "[", ""), "]", "")
+    resultat = ""
     
-    ' Vérifier si c'est une requête
+    ' Chercher dans les requêtes
     For Each qdf In db.QueryDefs
-        If qdf.Name = nomSource Then
-            ObtenirRequeteSource = "Requête: " & nomSource
-            Exit Function
-        End If
+        On Error Resume Next
+        For Each fld In qdf.Fields
+            If fld.Name = nomChamp Then
+                resultat = "Requête: " & qdf.Name
+                Exit For
+            End If
+        Next fld
+        If resultat <> "" Then Exit For
     Next qdf
     
-    ' Vérifier si c'est une table
-    For Each tdf In db.TableDefs
-        If tdf.Name = nomSource And Left(tdf.Name, 4) <> "MSys" Then
-            ObtenirRequeteSource = "Table: " & nomSource
-            Exit Function
-        End If
-    Next tdf
+    ' Si pas trouvé dans les requêtes, chercher dans les tables
+    If resultat = "" Then
+        For Each tdf In db.TableDefs
+            If Left(tdf.Name, 4) <> "MSys" Then
+                On Error Resume Next
+                For Each fld In tdf.Fields
+                    If fld.Name = nomChamp Then
+                        resultat = "Table: " & tdf.Name
+                        Exit For
+                    End If
+                Next fld
+                If resultat <> "" Then Exit For
+            End If
+        Next tdf
+    End If
     
-    ' Si c'est un champ direct
-    ObtenirRequeteSource = "Champ: " & nomSource
+    ' Si toujours pas trouvé
+    If resultat = "" Then
+        resultat = "Source inconnue"
+    End If
+    
+    TrouverSourceChamp = resultat
+End Function
+
+Private Function AnalyserSourceListe(db As Database, sourceListe As String) As String
+    ' Vérifier si c'est une requête SQL ou une liste de valeurs
+    If InStr(1, sourceListe, "SELECT", vbTextCompare) > 0 Then
+        ' C'est une requête SQL
+        Dim tables As String
+        tables = ExtraireTablesRequete(sourceListe)
+        AnalyserSourceListe = "Requête SQL: " & tables
+    Else
+        ' C'est probablement une liste de valeurs
+        AnalyserSourceListe = "Liste de valeurs"
+    End If
+End Function
+
+Private Function ExtraireTablesRequete(sqlText As String) As String
+    Dim mots() As String
+    Dim i As Integer
+    Dim dansFrom As Boolean
+    Dim tables As String
+    
+    If sqlText = "" Then Exit Function
+    
+    ' Normaliser le SQL
+    sqlText = Replace(Replace(Replace(sqlText, vbCrLf, " "), vbTab, " "), "  ", " ")
+    mots = Split(sqlText, " ")
+    
+    dansFrom = False
+    tables = ""
+    
+    For i = LBound(mots) To UBound(mots)
+        If UCase(mots(i)) = "FROM" Then
+            dansFrom = True
+        ElseIf dansFrom And (UCase(mots(i)) = "WHERE" Or UCase(mots(i)) = "ORDER" Or UCase(mots(i)) = "GROUP") Then
+            Exit For
+        ElseIf dansFrom And mots(i) <> "" And UCase(mots(i)) <> "INNER" And _
+               UCase(mots(i)) <> "LEFT" And UCase(mots(i)) <> "RIGHT" And _
+               UCase(mots(i)) <> "JOIN" And UCase(mots(i)) <> "ON" Then
+            ' Nettoyer le nom de table
+            Dim nomTable As String
+            nomTable = mots(i)
+            
+            ' Enlever les crochets
+            nomTable = Replace(Replace(nomTable, "[", ""), "]", "")
+            
+            ' Enlever les alias (après un espace)
+            If InStr(nomTable, " ") > 0 Then
+                nomTable = Left(nomTable, InStr(nomTable, " ") - 1)
+            End If
+            
+            ' Ajouter la table si elle n'est pas déjà dans la liste
+            If InStr(tables, nomTable) = 0 And nomTable <> "" Then
+                tables = tables & nomTable & "; "
+            End If
+        End If
+    Next i
+    
+    If Len(tables) > 2 Then
+        ExtraireTablesRequete = Left(tables, Len(tables) - 2) ' Enlever le dernier "; "
+    Else
+        ExtraireTablesRequete = tables
+    End If
+End Function
+
+Private Function ExtraireTablesEtRelations(db As Database, sourceInfo As String) As String
+    Dim resultat As String
+    Dim parties() As String
+    Dim i As Integer
+    
+    resultat = ""
+    
+    ' Si la sourceInfo contient des informations sur les tables
+    If InStr(1, sourceInfo, "Requête:", vbTextCompare) > 0 Then
+        ' Extraire le nom de la requête
+        Dim nomRequete As String
+        parties = Split(sourceInfo, ": ")
+        If UBound(parties) >= 1 Then
+            nomRequete = parties(1)
+            
+            ' Trouver la requête
+            Dim qdf As QueryDef
+            For Each qdf In db.QueryDefs
+                If qdf.Name = nomRequete Then
+                    ' Extraire les tables de la requête
+                    resultat = ExtraireTablesRequete(qdf.SQL)
+                    Exit For
+                End If
+            Next qdf
+        End If
+    ElseIf InStr(1, sourceInfo, "Table:", vbTextCompare) > 0 Then
+        ' C'est une table directement
+        parties = Split(sourceInfo, ": ")
+        If UBound(parties) >= 1 Then
+            resultat = parties(1)
+        End If
+    End If
+    
+    ExtraireTablesEtRelations = resultat
 End Function
 
 Private Function IsExcelInstalled() As Boolean
